@@ -41,7 +41,7 @@ if "generated_quizzes" not in st.session_state:
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# API HELPER FUNCTIONS
 # ============================================================
 
 def generate_plan(payload: dict):
@@ -175,6 +175,32 @@ def get_plan_progress(plan_id: int):
         return None
 
 
+def get_stats_overview():
+    """
+    Genel dashboard istatistiklerini backend'den alır.
+
+    FastAPI endpoint:
+    GET /stats/overview
+    """
+
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/stats/overview",
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return response.json()
+
+        return None
+
+    except requests.exceptions.ConnectionError:
+        return None
+
+    except Exception:
+        return None
+
+
 def update_task_completion(task_id: int, is_completed: bool):
     """
     Bir görevin tamamlandı/tamamlanmadı durumunu backend'e gönderir.
@@ -200,6 +226,68 @@ def update_task_completion(task_id: int, is_completed: bool):
 
     except Exception as e:
         return False, str(e)
+
+# QUIZ GENERATION FUNCTION
+def generate_weekly_quiz(plan_id: int, week_id: int):
+    """
+    Belirli bir planın belirli haftası için quiz üretir.
+
+    FastAPI endpoint:
+    POST /quiz/plans/{plan_id}/weeks/{week_id}/generate
+    """
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/quiz/plans/{plan_id}/weeks/{week_id}/generate",
+            timeout=60
+        )
+
+        if response.status_code == 200:
+            return response.json(), None
+
+        return None, response.text
+
+    except requests.exceptions.ConnectionError:
+        return None, "FastAPI backend çalışmıyor. Quiz üretilemedi."
+
+    except Exception as e:
+        return None, str(e)
+
+# ============================================================
+# UI RENDER FUNCTIONS
+# ============================================================
+
+def render_dashboard_overview():
+    """
+    Ana sayfada genel sistem istatistiklerini kartlar halinde gösterir.
+    """
+
+    stats = get_stats_overview()
+
+    if not stats:
+        st.info("Dashboard istatistikleri alınamadı.")
+        return
+
+    st.subheader("📊 Genel Durum")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Toplam Plan", stats["total_plans"])
+
+    with col2:
+        st.metric("Toplam Görev", stats["total_tasks"])
+
+    with col3:
+        st.metric("Tamamlanan Görev", stats["completed_tasks"])
+
+    with col4:
+        st.metric(
+            "Genel İlerleme",
+            f'%{stats["overall_progress_percentage"]}'
+        )
+
+    st.progress(stats["overall_progress_percentage"] / 100)
 
 
 def render_progress(plan_id: int):
@@ -251,7 +339,7 @@ def render_plan_detail(plan: dict):
     st.write("**Hedef:**", plan["goal"])
     st.write("**Öğrenme Tercihi:**", plan.get("learning_preference"))
 
-        # AI tarafından oluşturulan genel plan özetini gösterir.
+    # AI tarafından oluşturulan genel plan özetini gösterir.
     if plan.get("summary"):
         st.info(f'📝 Plan Özeti: {plan["summary"]}')
 
@@ -267,7 +355,6 @@ def render_plan_detail(plan: dict):
     st.markdown("### 🗓️ Haftalık Öğrenme Planı")
 
     # Haftalık planları gösteriyoruz.
-        # Haftalık planları gösteriyoruz.
     for week in plan.get("weeks", []):
         with st.expander(
             f'Hafta {week["week_number"]}: {week["title"]}',
@@ -546,92 +633,6 @@ def render_saved_plans():
                         st.error("Plan silinemedi.")
                         st.code(error)
 
-
-# QUIZ GENERATION FUNCTION
-def generate_weekly_quiz(plan_id: int, week_id: int):
-    """
-    Belirli bir planın belirli haftası için quiz üretir.
-
-    FastAPI endpoint:
-    POST /quiz/plans/{plan_id}/weeks/{week_id}/generate
-    """
-
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/quiz/plans/{plan_id}/weeks/{week_id}/generate",
-            timeout=60
-        )
-
-        if response.status_code == 200:
-            return response.json(), None
-
-        return None, response.text
-
-    except requests.exceptions.ConnectionError:
-        return None, "FastAPI backend çalışmıyor. Quiz üretilemedi."
-
-    except Exception as e:
-        return None, str(e)
-
-
-
-def get_stats_overview():
-    """
-    Genel dashboard istatistiklerini backend'den alır.
-
-    FastAPI endpoint:
-    GET /stats/overview
-    """
-
-    try:
-        response = requests.get(
-            f"{API_BASE_URL}/stats/overview",
-            timeout=30
-        )
-
-        if response.status_code == 200:
-            return response.json()
-
-        return None
-
-    except requests.exceptions.ConnectionError:
-        return None
-
-    except Exception:
-        return None
-
-
-def render_dashboard_overview():
-    """
-    Ana sayfada genel sistem istatistiklerini kartlar halinde gösterir.
-    """
-
-    stats = get_stats_overview()
-
-    if not stats:
-        st.info("Dashboard istatistikleri alınamadı.")
-        return
-
-    st.subheader("📊 Genel Durum")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Toplam Plan", stats["total_plans"])
-
-    with col2:
-        st.metric("Toplam Görev", stats["total_tasks"])
-
-    with col3:
-        st.metric("Tamamlanan Görev", stats["completed_tasks"])
-
-    with col4:
-        st.metric(
-            "Genel İlerleme",
-            f'%{stats["overall_progress_percentage"]}'
-        )
-
-    st.progress(stats["overall_progress_percentage"] / 100)
 
 
 # ============================================================
