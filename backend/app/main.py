@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
-from app.routes import plans, tasks, quiz, stats
+from app.routes import plans, tasks, quiz, stats, quiz_results
 from app import models
 
 
@@ -91,3 +91,4 @@ app.include_router(plans.router)
 app.include_router(tasks.router)
 app.include_router(quiz.router)
 app.include_router(stats.router)
+app.include_router(quiz_results.router)

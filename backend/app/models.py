@@ -31,7 +31,8 @@ class LearningPlan(Base):
     weeks = relationship(
         "PlanWeek",
         back_populates="plan",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        order_by="PlanWeek.week_number"
     )
 
 
@@ -62,7 +63,8 @@ class PlanWeek(Base):
     tasks = relationship(
         "PlanTask",
         back_populates="week",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        order_by="PlanTask.id"
     )
 
     # PlanWeek -> PlanResource ilişkisi.
@@ -70,7 +72,8 @@ class PlanWeek(Base):
     resources = relationship(
         "PlanResource",
         back_populates="week",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        order_by="PlanResource.id"
     )
 
 
@@ -115,3 +118,26 @@ class PlanResource(Base):
         "PlanWeek",
         back_populates="resources"
     )
+
+class QuizResult(Base):
+    __tablename__ = "quiz_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Hangi plana ait quiz sonucu olduğunu tutar.
+    plan_id = Column(Integer, ForeignKey("learning_plans.id"), nullable=False)
+
+    # Hangi haftaya ait quiz sonucu olduğunu tutar.
+    week_id = Column(Integer, ForeignKey("plan_weeks.id"), nullable=False)
+
+    quiz_title = Column(String, nullable=False)
+
+    correct_count = Column(Integer, nullable=False)
+    total_questions = Column(Integer, nullable=False)
+    score_percentage = Column(Integer, nullable=False)
+
+    # Quizdeki soru, kullanıcının cevabı, doğru cevap ve açıklama detaylarını JSON string olarak saklar.
+    # MVP için ayrı quiz_questions / quiz_answers tabloları yerine sade bir JSON alanı kullanıyoruz.
+    details_json = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)

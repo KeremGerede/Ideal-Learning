@@ -1,3 +1,4 @@
+import json
 import requests
 import streamlit as st
 
@@ -253,6 +254,83 @@ def generate_weekly_quiz(plan_id: int, week_id: int):
     except Exception as e:
         return None, str(e)
 
+
+
+def save_quiz_result(
+    plan_id: int,
+    week_id: int,
+    quiz_title: str,
+    correct_count: int,
+    total_questions: int,
+    detailed_results: list | None = None
+):
+    """
+    Quiz sonucunu backend üzerinden veritabanına kaydeder.
+
+    FastAPI endpoint:
+    POST /quiz-results/
+
+    Not:
+    - correct_count ve total_questions skor hesaplama için kullanılır.
+    - detailed_results ise soru/cevap detaylarını JSON olarak saklamak için gönderilir.
+    """
+
+    payload = {
+        "plan_id": plan_id,
+        "week_id": week_id,
+        "quiz_title": quiz_title,
+        "correct_count": correct_count,
+        "total_questions": total_questions,
+        "details_json": json.dumps(
+            detailed_results or [],
+            ensure_ascii=False
+        )
+    }
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/quiz-results/",
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return response.json(), None
+
+        return None, response.text
+
+    except requests.exceptions.ConnectionError:
+        return None, "FastAPI backend çalışmıyor. Quiz sonucu kaydedilemedi."
+
+    except Exception as e:
+        return None, str(e)
+
+def get_quiz_results_by_plan(plan_id: int):
+    """
+    Belirli bir plana ait kayıtlı quiz sonuçlarını backend'den alır.
+
+    FastAPI endpoint:
+    GET /quiz-results/plan/{plan_id}
+    """
+
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/quiz-results/plan/{plan_id}",
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return response.json()
+
+        return []
+
+    except requests.exceptions.ConnectionError:
+        return []
+
+    except Exception:
+        return []
+
+
 # ============================================================
 # UI RENDER FUNCTIONS
 # ============================================================
@@ -260,6 +338,15 @@ def generate_weekly_quiz(plan_id: int, week_id: int):
 def render_dashboard_overview():
     """
     Ana sayfada genel sistem istatistiklerini kartlar halinde gösterir.
+
+    Gösterilen metrikler:
+    - Toplam plan
+    - Toplam görev
+    - Tamamlanan görev
+    - Genel ilerleme
+    - Toplam quiz
+    - Ortalama quiz başarısı
+    - En son quiz skoru
     """
 
     stats = get_stats_overview()
@@ -270,6 +357,7 @@ def render_dashboard_overview():
 
     st.subheader("📊 Genel Durum")
 
+    # Birinci satır: plan ve görev metrikleri
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -289,6 +377,35 @@ def render_dashboard_overview():
 
     st.progress(stats["overall_progress_percentage"] / 100)
 
+    st.divider()
+
+    # İkinci satır: quiz metrikleri
+    quiz_col1, quiz_col2, quiz_col3 = st.columns(3)
+
+    with quiz_col1:
+        st.metric(
+            "Toplam Quiz",
+            stats.get("total_quizzes", 0)
+        )
+
+    with quiz_col2:
+        st.metric(
+            "Ortalama Quiz Başarısı",
+            f'%{stats.get("average_quiz_score", 0)}'
+        )
+
+    with quiz_col3:
+        latest_score = stats.get("latest_quiz_score")
+
+        if latest_score is None:
+            latest_score_text = "Yok"
+        else:
+            latest_score_text = f"%{latest_score}"
+
+        st.metric(
+            "En Son Quiz Skoru",
+            latest_score_text
+        )
 
 def render_progress(plan_id: int):
     """
@@ -349,6 +466,11 @@ def render_plan_detail(plan: dict):
 
     # Planın güncel ilerleme yüzdesini gösterir.
     render_progress(plan["id"])
+
+    st.divider()
+
+    # Daha önce tamamlanıp veritabanına kaydedilen quiz sonuçlarını gösteriyoruz.
+    render_saved_quiz_results(plan["id"])
 
     st.divider()
 
@@ -485,9 +607,12 @@ def render_plan_detail(plan: dict):
                     "Quizi Bitir ve Skoru Hesapla",
                     key=f'finish_quiz_{plan["id"]}_{week["id"]}'
                 ):
+                    # Kullanıcının doğru cevap sayısını hesaplamak için sayaç oluşturuyoruz.
+                    # Bu değişken sadece butona basıldığında oluşmalı ve kullanılmalı.
                     correct_count = 0
                     detailed_results = []
 
+                    # Her soruyu tek tek kontrol ediyoruz.
                     for index, question in enumerate(questions, start=1):
                         selected_answer = user_answers.get(index)
                         correct_answer = question["correct_answer"]
@@ -515,12 +640,30 @@ def render_plan_detail(plan: dict):
                             2
                         )
 
+                    # Quiz sonucunu önce Streamlit session_state içine kaydediyoruz.
+                    # Böylece sayfa yeniden çizildiğinde sonuç ekranda gösterilebilir.
                     st.session_state[result_key] = {
                         "correct_count": correct_count,
                         "total_questions": total_questions,
                         "score_percentage": score_percentage,
                         "detailed_results": detailed_results
                     }
+
+                    # Quiz sonucu hesaplandıktan sonra backend'e kaydediyoruz.
+                    # Bu kod mutlaka correct_count hesaplandıktan sonra ve bu buton bloğunun içinde olmalı.
+                    saved_result, save_error = save_quiz_result(
+                        plan_id=plan["id"],
+                        week_id=week["id"],
+                        quiz_title=quiz["quiz_title"],
+                        correct_count=correct_count,
+                        total_questions=total_questions,
+                        detailed_results=detailed_results
+                    )
+
+                    if saved_result:
+                        st.session_state.success_message = "Quiz sonucu başarıyla kaydedildi."
+                    else:
+                        st.session_state.success_message = f"Quiz sonucu kaydedilemedi: {save_error}"
 
                     st.rerun()
 
@@ -634,6 +777,69 @@ def render_saved_plans():
                         st.code(error)
 
 
+def render_saved_quiz_results(plan_id: int):
+    """
+    Aktif öğrenme planına ait daha önce kaydedilmiş quiz sonuçlarını gösterir.
+
+    Amaç:
+    - Kullanıcı sayfayı yenilese bile geçmiş quiz skorlarını görebilsin.
+    - Quiz sonucu veritabanına kaydedildi mi kolayca kontrol edilsin.
+    """
+
+    quiz_results = get_quiz_results_by_plan(plan_id)
+
+    if not quiz_results:
+        st.info("Bu plan için henüz kaydedilmiş quiz sonucu yok.")
+        return
+
+    st.markdown("### 🧪 Kaydedilmiş Quiz Sonuçları")
+
+    for result in quiz_results:
+        with st.container(border=True):
+            col_title, col_score, col_date = st.columns([2, 1, 1])
+
+            with col_title:
+                st.write(f'**{result["quiz_title"]}**')
+                st.caption(f'Plan ID: {result["plan_id"]} | Hafta ID: {result["week_id"]}')
+
+            with col_score:
+                st.metric(
+                    "Skor",
+                    f'{result["correct_count"]}/{result["total_questions"]}'
+                )
+
+            with col_date:
+                created_at = result.get("created_at", "")
+                st.caption("Oluşturulma")
+                st.write(created_at[:19].replace("T", " "))
+
+            score_percentage = result.get("score_percentage", 0)
+
+            # Backend yüzdeyi 0-100 arasında döndürdüğü için Streamlit progress 0-1 arası bekler.
+            st.progress(score_percentage / 100)
+
+            st.write(f'Başarı oranı: **%{score_percentage}**')
+            details_json = result.get("details_json")
+
+            if details_json:
+                try:
+                    details = json.loads(details_json)
+                except json.JSONDecodeError:
+                    details = []
+
+                if details:
+                    with st.expander("Soru ve Cevap Detaylarını Göster", expanded=False):
+                        for item in details:
+                            with st.container(border=True):
+                                if item.get("is_correct"):
+                                    st.success(f'Soru {item.get("question_number")}: Doğru')
+                                else:
+                                    st.error(f'Soru {item.get("question_number")}: Yanlış')
+
+                                st.write(f'**Soru:** {item.get("question")}')
+                                st.write(f'**Senin cevabın:** {item.get("selected_answer")}')
+                                st.write(f'**Doğru cevap:** {item.get("correct_answer")}')
+                                st.info(f'**Açıklama:** {item.get("explanation")}')
 
 # ============================================================
 # MAIN UI

@@ -100,3 +100,36 @@ class StatsOverviewResponse(BaseModel):
     total_tasks: int
     completed_tasks: int
     overall_progress_percentage: float
+
+    # Quiz istatistikleri
+    total_quizzes: int
+    average_quiz_score: float
+    latest_quiz_score: float | None = None
+
+class QuizResultCreate(BaseModel):
+    plan_id: int
+    week_id: int
+    quiz_title: str
+    correct_count: int
+    total_questions: int
+
+    # Quiz soru/cevap detayları JSON string olarak backend'e gönderilir.
+    details_json: Optional[str] = None
+
+
+class QuizResultResponse(BaseModel):
+    id: int
+    plan_id: int
+    week_id: int
+    quiz_title: str
+    correct_count: int
+    total_questions: int
+    score_percentage: float
+
+    # Kaydedilmiş quiz detayları.
+    details_json: Optional[str] = None
+
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

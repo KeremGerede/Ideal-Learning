@@ -12,6 +12,160 @@ router = APIRouter(
 )
 
 
+
+def sort_plan_response(plan: models.LearningPlan):
+    """
+    API response dönmeden önce plan içindeki haftaları, görevleri ve kaynakları sıralar.
+
+    Amaç:
+    - Haftalar her zaman week_number sırasıyla gelsin.
+    - Görevler her zaman id sırasıyla gelsin.
+    - Kaynaklar her zaman id sırasıyla gelsin.
+    - Streamlit ve React tarafında sıralama problemi yaşanmasın.
+    """
+
+    if not plan:
+        return plan
+
+    plan.weeks = sorted(
+        plan.weeks,
+        key=lambda week: week.week_number or 0
+    )
+
+    for week in plan.weeks:
+        week.tasks = sorted(
+            week.tasks,
+            key=lambda task: task.id or 0
+        )
+
+        week.resources = sorted(
+            week.resources,
+            key=lambda resource: resource.id or 0
+        )
+
+    return plan
+
+# Bu fonksiyon, bir planı haftaları/görevleri/kaynakları ile birlikte getirir.
+def get_plan_with_details(
+    db: Session,
+    plan_id: int
+):
+    """
+    Bir öğrenme planını haftaları, görevleri ve kaynakları ile birlikte getirir.
+    """
+
+    plan = (
+        db.query(models.LearningPlan)
+        .options(
+            joinedload(models.LearningPlan.weeks)
+            .joinedload(models.PlanWeek.tasks),
+            joinedload(models.LearningPlan.weeks)
+            .joinedload(models.PlanWeek.resources)
+        )
+        .filter(models.LearningPlan.id == plan_id)
+        .first()
+    )
+
+    return sort_plan_response(plan)
+
+
+#Bu fonksiyon, AI’dan gelen normalize edilmiş planı veritabanına kaydeder
+def create_plan_from_ai_data(
+    db: Session,
+    ai_plan: dict,
+    fallback_request: schemas.GeneratePlanRequest
+):
+    """
+    AI'dan gelen öğrenme planı verisini veritabanına kaydeder.
+
+    Kaydedilen yapılar:
+    - LearningPlan
+    - PlanWeek
+    - PlanTask
+    - PlanResource
+    """
+
+    weeks = ai_plan.get("weeks", [])
+
+    if not weeks:
+        raise HTTPException(
+            status_code=500,
+            detail="AI geçerli bir haftalık plan döndürmedi."
+        )
+
+    plan = models.LearningPlan(
+        topic=ai_plan.get("topic", fallback_request.topic),
+        level=ai_plan.get("level", fallback_request.level),
+        goal=ai_plan.get("goal", fallback_request.goal),
+        weekly_hours=ai_plan.get(
+            "weekly_hours",
+            fallback_request.weekly_hours
+        ),
+        duration_weeks=ai_plan.get(
+            "duration_weeks",
+            fallback_request.duration_weeks
+        ),
+        learning_preference=ai_plan.get(
+            "learning_preference",
+            fallback_request.learning_preference
+        ),
+        summary=ai_plan.get("summary"),
+        final_outcome=ai_plan.get("final_outcome")
+    )
+
+    db.add(plan)
+    db.flush()
+
+    for week_data in weeks:
+        week = models.PlanWeek(
+            plan_id=plan.id,
+            week_number=week_data.get("week_number"),
+            title=week_data.get("title", "Hafta Başlığı"),
+            description=week_data.get("description"),
+            estimated_hours=week_data.get("estimated_hours"),
+            mini_project=week_data.get("mini_project")
+        )
+
+        db.add(week)
+        db.flush()
+
+        for task_data in week_data.get("tasks", []):
+            if isinstance(task_data, str):
+                task = models.PlanTask(
+                    week_id=week.id,
+                    task_text=task_data,
+                    is_completed=False
+                )
+
+            else:
+                task = models.PlanTask(
+                    week_id=week.id,
+                    task_text=task_data.get("task_text", "Görev açıklaması"),
+                    task_type=task_data.get("task_type"),
+                    estimated_minutes=task_data.get("estimated_minutes"),
+                    difficulty=task_data.get("difficulty"),
+                    is_completed=False
+                )
+
+            db.add(task)
+
+        for resource_data in week_data.get("resources", []):
+            resource = models.PlanResource(
+                week_id=week.id,
+                resource_title=resource_data.get("resource_title", "Kaynak"),
+                resource_type=resource_data.get("resource_type"),
+                resource_description=resource_data.get("resource_description"),
+                resource_url=resource_data.get("resource_url")
+            )
+
+            db.add(resource)
+
+    db.commit()
+    db.refresh(plan)
+
+    return get_plan_with_details(db, plan.id)
+
+
 @router.post("/generate", response_model=schemas.PlanResponse)
 def generate_learning_plan(
     request: schemas.GeneratePlanRequest,
@@ -171,7 +325,7 @@ def generate_learning_plan(
         .first()
     )
 
-    return created_plan
+    return sort_plan_response(created_plan)
 
 
 @router.get("/", response_model=list[schemas.PlanResponse])
@@ -192,7 +346,7 @@ def get_all_plans(db: Session = Depends(get_db)):
         .all()
     )
 
-    return plans
+    return [sort_plan_response(plan) for plan in plans]
 
 
 @router.get("/{plan_id}", response_model=schemas.PlanResponse)
@@ -204,17 +358,7 @@ def get_plan_by_id(
     Belirli bir öğrenme planını ID'ye göre detaylı şekilde getirir.
     """
 
-    plan = (
-        db.query(models.LearningPlan)
-        .options(
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.tasks),
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.resources)
-        )
-        .filter(models.LearningPlan.id == plan_id)
-        .first()
-    )
+    plan = get_plan_with_details(db, plan_id)
 
     if not plan:
         raise HTTPException(status_code=404, detail="Plan bulunamadı.")
@@ -271,8 +415,7 @@ def delete_plan(
     """
     Belirli bir öğrenme planını siler.
 
-    LearningPlan modelinde weeks relationship'i cascade="all, delete-orphan"
-    olarak tanımlandığı için plana bağlı haftalar, görevler ve kaynaklar da silinir.
+    Plana bağlı quiz sonuçları da silinir.
     """
 
     plan = (
@@ -283,6 +426,11 @@ def delete_plan(
 
     if not plan:
         raise HTTPException(status_code=404, detail="Plan bulunamadı.")
+
+    # Plan silinmeden önce bu plana ait quiz sonuçlarını temizliyoruz.
+    db.query(models.QuizResult).filter(
+        models.QuizResult.plan_id == plan_id
+    ).delete(synchronize_session=False)
 
     db.delete(plan)
     db.commit()

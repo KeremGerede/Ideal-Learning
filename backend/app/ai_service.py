@@ -783,6 +783,356 @@ Return the output using exactly this JSON structure:
 }}
 """
 
+def normalize_quiz_data(
+    quiz_data: Dict[str, Any],
+    topic: str,
+    week_title: str,
+    question_count: int = 5
+) -> Dict[str, Any]:
+    """
+    Gemini'den gelen quiz verisini normalize eder.
+
+    Amaç:
+    - Soru sayısını istenen sayıya tamamlamak
+    - Her soruda tam olarak 4 seçenek olmasını sağlamak
+    - correct_answer değerinin options içinde olmasını garanti etmek
+    - Eksik explanation alanlarını doldurmak
+    - Backend ve Streamlit tarafında bozuk quiz verisi yüzünden hata oluşmasını engellemek
+    """
+
+    # Eğer Gemini beklenen dict formatında veri döndürmezse fallback quiz üretiriz.
+    if not isinstance(quiz_data, dict):
+        return generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+    quiz_title = quiz_data.get("quiz_title") or f"{week_title} Quiz"
+    raw_questions = quiz_data.get("questions", [])
+
+    # questions alanı liste değilse fallback quiz kullanırız.
+    if not isinstance(raw_questions, list) or len(raw_questions) == 0:
+        return generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+    normalized_questions = []
+
+    # Gemini bazen fazla soru döndürebilir. İstenen sayıya kadar alıyoruz.
+    for index, question_data in enumerate(raw_questions[:question_count], start=1):
+        if not isinstance(question_data, dict):
+            continue
+
+        question_text = (
+            question_data.get("question")
+            or f"{topic} konusunda {index}. teknik değerlendirme sorusu"
+        )
+
+        options = question_data.get("options", [])
+
+        # options liste değilse boş listeye düşürürüz.
+        if not isinstance(options, list):
+            options = []
+
+        # Seçenekleri string'e çevirip boş olanları temizliyoruz.
+        cleaned_options = []
+
+        for option in options:
+            if option is None:
+                continue
+
+            option_text = str(option).strip()
+
+            if option_text and option_text not in cleaned_options:
+                cleaned_options.append(option_text)
+
+        correct_answer = question_data.get("correct_answer")
+
+        if correct_answer is not None:
+            correct_answer = str(correct_answer).strip()
+
+        # correct_answer boşsa ilk seçenekten seçiyoruz.
+        # Bu ideal değil ama bozuk veri yüzünden sistemin patlamasını engeller.
+        if not correct_answer:
+            if cleaned_options:
+                correct_answer = cleaned_options[0]
+            else:
+                correct_answer = f"{topic} ile ilgili doğru teknik yaklaşımı seçmek"
+
+        # correct_answer options içinde yoksa seçeneklere ekliyoruz.
+        if correct_answer not in cleaned_options:
+            cleaned_options.insert(0, correct_answer)
+
+        # Her soruda tam 4 seçenek olmasını sağlıyoruz.
+        fallback_options = [
+            f"{topic} ile ilgili temel kavramları anlamak",
+            f"{topic} için uygulamalı örnek geliştirmek",
+            f"{topic} dokümantasyonunu doğru kullanmak",
+            f"{topic} ile ilgili hata çıktısını analiz etmek"
+        ]
+
+        for fallback_option in fallback_options:
+            if len(cleaned_options) >= 4:
+                break
+
+            if fallback_option not in cleaned_options:
+                cleaned_options.append(fallback_option)
+
+        # Eğer 4'ten fazla seçenek varsa doğru cevabı koruyarak ilk 4'e düşürürüz.
+        if len(cleaned_options) > 4:
+            limited_options = []
+
+            # Doğru cevabın mutlaka options içinde kalmasını garanti ediyoruz.
+            limited_options.append(correct_answer)
+
+            for option in cleaned_options:
+                if option == correct_answer:
+                    continue
+
+                if len(limited_options) >= 4:
+                    break
+
+                limited_options.append(option)
+
+            cleaned_options = limited_options
+
+        explanation = (
+            question_data.get("explanation")
+            or "Bu cevap, haftanın teknik konusu ve görevleriyle doğrudan ilişkilidir."
+        )
+
+        normalized_questions.append({
+            "question": question_text,
+            "options": cleaned_options,
+            "correct_answer": correct_answer,
+            "explanation": explanation
+        })
+
+    # Eğer Gemini istenenden az soru verdiyse fallback quiz sorularıyla tamamlıyoruz.
+    if len(normalized_questions) < question_count:
+        fallback_quiz = generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+        for fallback_question in fallback_quiz.get("questions", []):
+            if len(normalized_questions) >= question_count:
+                break
+
+            normalized_questions.append(fallback_question)
+
+    return {
+        "quiz_title": quiz_title,
+        "questions": normalized_questions[:question_count]
+    }
+
+# ============================================================
+# WEEKLY QUIZ NORMALIZER
+# ============================================================
+
+def normalize_quiz_data(
+    quiz_data: Dict[str, Any],
+    topic: str,
+    week_title: str,
+    question_count: int = 5
+) -> Dict[str, Any]:
+    """
+    Gemini'den gelen quiz verisini güvenli ve standart hale getirir.
+
+    Amaç:
+    - Quiz response yapısının backend ve Streamlit için güvenli olmasını sağlamak
+    - Eksik soru varsa fallback sorularla tamamlamak
+    - Her soruda tam olarak 4 seçenek olmasını garanti etmek
+    - correct_answer değerinin options içinde olmasını garanti etmek
+    - Gemini bazen "A", "B", "C", "D" gibi cevap döndürürse bunu gerçek seçenek metnine çevirmek
+    - Eksik açıklama varsa varsayılan açıklama eklemek
+    """
+
+    def clean_option_text(value: Any) -> str:
+        """
+        Seçenek metinlerini temizler.
+
+        Örnek:
+        - "A) Jenkins pipeline" -> "Jenkins pipeline"
+        - "B. Docker container" -> "Docker container"
+
+        Bu işlem UI tarafında daha temiz seçenek göstermemizi sağlar.
+        """
+
+        if value is None:
+            return ""
+
+        text = str(value).strip()
+
+        prefixes = ["A)", "B)", "C)", "D)", "A.", "B.", "C.", "D.", "1)", "2)", "3)", "4)"]
+
+        for prefix in prefixes:
+            if text.startswith(prefix):
+                return text[len(prefix):].strip()
+
+        return text
+
+    def resolve_correct_answer(
+        correct_answer: Any,
+        options: list[str]
+    ) -> str:
+        """
+        correct_answer değerini gerçek seçenek metnine çevirir.
+
+        Gemini bazen doğru cevabı direkt seçenek metni olarak değil,
+        "A", "B", "C", "D" gibi harf ile döndürebilir.
+
+        Bu durumda ilgili harfin seçenek index'ine karşılık gelen metni doğru cevap yaparız.
+        """
+
+        if correct_answer is None:
+            return options[0] if options else f"{topic} ile ilgili doğru teknik yaklaşım"
+
+        answer_text = str(correct_answer).strip()
+
+        letter_map = {
+            "A": 0,
+            "B": 1,
+            "C": 2,
+            "D": 3,
+            "A)": 0,
+            "B)": 1,
+            "C)": 2,
+            "D)": 3,
+            "A.": 0,
+            "B.": 1,
+            "C.": 2,
+            "D.": 3,
+        }
+
+        if answer_text in letter_map:
+            option_index = letter_map[answer_text]
+
+            if 0 <= option_index < len(options):
+                return options[option_index]
+
+        return clean_option_text(answer_text)
+
+    # Gemini beklenen dict formatında veri döndürmezse fallback quiz üretiriz.
+    if not isinstance(quiz_data, dict):
+        return generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+    quiz_title = quiz_data.get("quiz_title") or f"{week_title} Quiz"
+    raw_questions = quiz_data.get("questions", [])
+
+    # questions alanı liste değilse fallback quiz kullanırız.
+    if not isinstance(raw_questions, list) or len(raw_questions) == 0:
+        return generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+    normalized_questions = []
+
+    # Gemini fazla soru döndürürse sadece istenen kadarını alıyoruz.
+    for index, question_data in enumerate(raw_questions[:question_count], start=1):
+        if not isinstance(question_data, dict):
+            continue
+
+        question_text = (
+            question_data.get("question")
+            or f"{topic} konusunda {index}. teknik değerlendirme sorusu"
+        )
+
+        raw_options = question_data.get("options", [])
+
+        if not isinstance(raw_options, list):
+            raw_options = []
+
+        cleaned_options = []
+
+        # Seçenekleri temizleyip tekrar edenleri çıkarıyoruz.
+        for option in raw_options:
+            option_text = clean_option_text(option)
+
+            if option_text and option_text not in cleaned_options:
+                cleaned_options.append(option_text)
+
+        correct_answer = resolve_correct_answer(
+            question_data.get("correct_answer"),
+            cleaned_options
+        )
+
+        # Doğru cevabın seçenekler içinde olmasını garanti ediyoruz.
+        if correct_answer not in cleaned_options:
+            cleaned_options.insert(0, correct_answer)
+
+        # Seçenek sayısı 4'ten azsa teknik ama genel fallback seçeneklerle tamamlıyoruz.
+        fallback_options = [
+            f"{topic} ile ilgili temel kavramları anlamak",
+            f"{topic} için uygulamalı örnek geliştirmek",
+            f"{topic} dokümantasyonunu doğru kullanmak",
+            f"{topic} ile ilgili hata çıktısını analiz etmek"
+        ]
+
+        for fallback_option in fallback_options:
+            if len(cleaned_options) >= 4:
+                break
+
+            if fallback_option not in cleaned_options:
+                cleaned_options.append(fallback_option)
+
+        # Seçenek sayısı 4'ten fazlaysa doğru cevabı koruyarak 4'e düşürüyoruz.
+        if len(cleaned_options) > 4:
+            limited_options = [correct_answer]
+
+            for option in cleaned_options:
+                if option == correct_answer:
+                    continue
+
+                if len(limited_options) >= 4:
+                    break
+
+                limited_options.append(option)
+
+            cleaned_options = limited_options
+
+        explanation = (
+            question_data.get("explanation")
+            or "Bu cevap, haftanın teknik konusu ve görevleriyle doğrudan ilişkilidir."
+        )
+
+        normalized_questions.append({
+            "question": str(question_text).strip(),
+            "options": cleaned_options,
+            "correct_answer": correct_answer,
+            "explanation": str(explanation).strip()
+        })
+
+    # Gemini istenenden az soru döndürürse fallback quiz ile tamamlıyoruz.
+    if len(normalized_questions) < question_count:
+        fallback_quiz = generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+        for fallback_question in fallback_quiz.get("questions", []):
+            if len(normalized_questions) >= question_count:
+                break
+
+            normalized_questions.append(fallback_question)
+
+    return {
+        "quiz_title": quiz_title,
+        "questions": normalized_questions[:question_count]
+    }
+
+
 def shuffle_quiz_options(quiz_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Quiz seçeneklerini karıştırır.
@@ -866,7 +1216,17 @@ def generate_weekly_quiz_with_gemini(
             )
 
             parsed_quiz = parse_gemini_json_response(response.text)
-            return shuffle_quiz_options(parsed_quiz)
+
+            # Gemini'den gelen quiz verisini önce normalize ediyoruz.
+            normalized_quiz = normalize_quiz_data(
+                quiz_data=parsed_quiz,
+                topic=topic,
+                week_title=week_title,
+                question_count=question_count
+            )
+
+            # Normalize edilen seçenekleri karıştırıyoruz.
+            return shuffle_quiz_options(normalized_quiz)
 
         except Exception as e:
             error_message = str(e)
@@ -884,7 +1244,15 @@ def generate_weekly_quiz_with_gemini(
                 question_count=question_count
             )
 
-            return shuffle_quiz_options(fallback_quiz)
+            # Fallback quiz de aynı güvenli formattan geçiriliyor.
+            normalized_fallback_quiz = normalize_quiz_data(
+                quiz_data=fallback_quiz,
+                topic=topic,
+                week_title=week_title,
+                question_count=question_count
+            )
+
+            return shuffle_quiz_options(normalized_fallback_quiz)
 
 
 def generate_fallback_weekly_quiz(
