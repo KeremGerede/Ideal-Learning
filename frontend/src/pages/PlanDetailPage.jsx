@@ -1,0 +1,472 @@
+// src/pages/PlanDetailPage.jsx
+
+import { useEffect, useState } from "react";
+import {
+    getPlanById,
+    getQuizResultsByPlan,
+    updateTaskCompletion,
+} from "../api/apiClient";
+import WeeklyQuizPanel from "../components/WeeklyQuizPanel";
+
+function PlanDetailPage({ planId, onBack }) {
+    /**
+     * Seçilen öğrenme planının detay sayfası.
+     *
+     * Bu sayfada:
+     * - Plan özeti
+     * - Haftalık öğrenme planı
+     * - Görevler
+     * - Kaynaklar
+     * - Kayıtlı quiz sonuçları
+     * gösterilir.
+     */
+
+    const [plan, setPlan] = useState(null);
+    const [quizResults, setQuizResults] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [errorMessage, setErrorMessage] = useState("");
+
+    async function loadPlanDetail() {
+        /**
+         * Plan detayını ve bu plana ait quiz sonuçlarını backend'den çeker.
+         *
+         * Not:
+         * - Plan detayı ana veridir.
+         * - Quiz sonuçları alınamazsa sayfayı tamamen bozmak yerine boş liste gösteririz.
+         */
+
+        try {
+            setLoading(true);
+            setErrorMessage("");
+
+            const planData = await getPlanById(planId);
+
+            let quizData = [];
+
+            try {
+                quizData = await getQuizResultsByPlan(planId);
+            } catch (quizError) {
+                console.warn("Quiz sonuçları alınamadı:", quizError);
+                quizData = [];
+            }
+
+            setPlan(planData);
+            setQuizResults(quizData);
+        } catch (error) {
+            setErrorMessage(error.message || "Plan detayı alınırken hata oluştu.");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function handleTaskToggle(taskId, isCompleted) {
+        /**
+         * Görev checkbox değiştiğinde backend'e güncelleme gönderir.
+         * Güncellemeden sonra plan detayını tekrar yükleriz.
+         */
+
+        try {
+            await updateTaskCompletion(taskId, isCompleted);
+            await loadPlanDetail();
+        } catch (error) {
+            setErrorMessage(error.message || "Görev durumu güncellenemedi.");
+        }
+    }
+
+    function calculateProgress() {
+        /**
+         * Plan içindeki görevlerden lokal ilerleme yüzdesi hesaplar.
+         * Backend progress endpointi de kullanılabilir; burada detay verisinden hızlı hesaplıyoruz.
+         */
+
+        const weeks = plan?.weeks || [];
+        const tasks = weeks.flatMap((week) => week.tasks || []);
+
+        if (tasks.length === 0) {
+            return {
+                totalTasks: 0,
+                completedTasks: 0,
+                percentage: 0,
+            };
+        }
+
+        const completedTasks = tasks.filter((task) => task.is_completed).length;
+
+        return {
+            totalTasks: tasks.length,
+            completedTasks,
+            percentage: Math.round((completedTasks / tasks.length) * 100),
+        };
+    }
+
+    useEffect(() => {
+        /**
+         * PlanDetailPage ilk açıldığında veya planId değiştiğinde
+         * seçilen planın detaylarını backend'den yüklüyoruz.
+         *
+         * Bu çağrı olmazsa loading state true kalır ve sayfa sürekli
+         * "Plan detayı yükleniyor..." ekranında bekler.
+         */
+
+        if (!planId) {
+            setErrorMessage("Plan ID bulunamadı.");
+            setLoading(false);
+            return;
+        }
+
+        loadPlanDetail();
+    }, [planId]);
+
+    if (loading) {
+        return (
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-8">
+                <p className="text-slate-400">Plan detayı yükleniyor...</p>
+            </div>
+        );
+    }
+
+    if (errorMessage) {
+        return (
+            <div className="rounded-3xl border border-red-900/60 bg-red-950/40 p-8">
+                <h2 className="text-2xl font-bold text-red-200">
+                    Plan detayı alınamadı
+                </h2>
+
+                <p className="mt-3 text-red-200/80">{errorMessage}</p>
+
+                <button
+                    type="button"
+                    onClick={onBack}
+                    className="mt-5 rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:text-white"
+                >
+                    Planlara Dön
+                </button>
+            </div>
+        );
+    }
+
+    if (!plan) {
+        return null;
+    }
+
+    const progress = calculateProgress();
+
+    return (
+        <div className="space-y-8">
+            {/* Üst navigasyon */}
+            <button
+                type="button"
+                onClick={onBack}
+                className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-indigo-500 hover:text-white"
+            >
+                ← Planlara Dön
+            </button>
+
+            {/* Plan özeti */}
+            <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl shadow-slate-950/30">
+                <p className="text-sm font-semibold text-indigo-300">
+                    {plan.level}
+                </p>
+
+                <h2 className="mt-2 text-4xl font-bold text-slate-50">
+                    {plan.topic}
+                </h2>
+
+                <p className="mt-4 max-w-4xl text-sm leading-6 text-slate-400">
+                    {plan.summary || plan.goal}
+                </p>
+
+                {plan.final_outcome && (
+                    <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+                        <p className="text-sm font-semibold text-emerald-200">
+                            Plan Sonu Kazanım
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-emerald-100/80">
+                            {plan.final_outcome}
+                        </p>
+                    </div>
+                )}
+
+                <div className="mt-6 grid gap-4 md:grid-cols-4">
+                    <div className="rounded-2xl bg-slate-950/60 p-4">
+                        <p className="text-xs text-slate-500">Süre</p>
+                        <p className="mt-1 text-lg font-bold text-slate-100">
+                            {plan.duration_weeks} hafta
+                        </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-950/60 p-4">
+                        <p className="text-xs text-slate-500">Haftalık Saat</p>
+                        <p className="mt-1 text-lg font-bold text-slate-100">
+                            {plan.weekly_hours} saat
+                        </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-950/60 p-4">
+                        <p className="text-xs text-slate-500">Tamamlanan Görev</p>
+                        <p className="mt-1 text-lg font-bold text-slate-100">
+                            {progress.completedTasks}/{progress.totalTasks}
+                        </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-950/60 p-4">
+                        <p className="text-xs text-slate-500">İlerleme</p>
+                        <p className="mt-1 text-lg font-bold text-slate-100">
+                            %{progress.percentage}
+                        </p>
+                    </div>
+                </div>
+
+                <div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-800">
+                    <div
+                        className="h-full rounded-full bg-indigo-500"
+                        style={{ width: `${progress.percentage}%` }}
+                    />
+                </div>
+            </section>
+
+            {/* Haftalık plan */}
+            <section>
+                <h3 className="mb-4 text-2xl font-bold text-slate-100">
+                    Haftalık Öğrenme Planı
+                </h3>
+
+                <div className="space-y-5">
+                    {plan.weeks?.map((week) => (
+                        <div
+                            key={week.id}
+                            className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6"
+                        >
+                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold text-indigo-300">
+                                        Hafta {week.week_number}
+                                    </p>
+
+                                    <h4 className="mt-1 text-2xl font-bold text-slate-50">
+                                        {week.title}
+                                    </h4>
+                                </div>
+
+                                <span className="w-fit rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-300">
+                                    {week.estimated_hours || plan.weekly_hours} saat
+                                </span>
+                            </div>
+
+                            <p className="mt-4 text-sm leading-6 text-slate-400">
+                                {week.description}
+                            </p>
+
+                            {week.mini_project && (
+                                <div className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 p-4">
+                                    <p className="text-sm font-semibold text-sky-200">
+                                        Mini Proje
+                                    </p>
+                                    <p className="mt-2 text-sm leading-6 text-sky-100/80">
+                                        {week.mini_project}
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Görevler */}
+                            <div className="mt-6">
+                                <h5 className="font-bold text-slate-100">Görevler</h5>
+
+                                <div className="mt-3 space-y-3">
+                                    {week.tasks?.map((task) => (
+                                        <label
+                                            key={task.id}
+                                            className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 transition hover:border-indigo-500/50"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(task.is_completed)}
+                                                onChange={(event) =>
+                                                    handleTaskToggle(task.id, event.target.checked)
+                                                }
+                                                className="mt-1 h-4 w-4 accent-indigo-500"
+                                            />
+
+                                            <div className="flex-1">
+                                                <p
+                                                    className={
+                                                        task.is_completed
+                                                            ? "text-sm font-semibold text-slate-500 line-through"
+                                                            : "text-sm font-semibold text-slate-100"
+                                                    }
+                                                >
+                                                    {task.task_text}
+                                                </p>
+
+                                                <p className="mt-2 text-xs text-slate-500">
+                                                    {task.task_type || "Görev"} | {task.estimated_minutes || 0} dk |{" "}
+                                                    {task.difficulty || "Orta"}
+                                                </p>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Kaynaklar */}
+                            <div className="mt-6">
+                                <h5 className="font-bold text-slate-100">Kaynaklar</h5>
+
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    {week.resources?.map((resource) => (
+                                        <div
+                                            key={resource.id}
+                                            className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
+                                        >
+                                            <p className="text-sm font-bold text-slate-100">
+                                                {resource.resource_title}
+                                            </p>
+
+                                            <p className="mt-1 text-xs text-indigo-300">
+                                                {resource.resource_type}
+                                            </p>
+
+                                            <p className="mt-3 text-sm leading-6 text-slate-400">
+                                                {resource.resource_description}
+                                            </p>
+
+                                            {resource.resource_url && (
+                                                <a
+                                                    href={resource.resource_url}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="mt-4 inline-flex rounded-xl border border-indigo-500/40 px-3 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500 hover:text-white"
+                                                >
+                                                    Kaynağı Aç
+                                                </a>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <WeeklyQuizPanel
+                                planId={plan.id}
+                                week={week}
+                                onQuizSaved={loadPlanDetail}
+                            />
+                        </div>
+                    ))}
+                </div>
+            </section>
+
+            {/* Kayıtlı quiz sonuçları */}
+            <section>
+                <h3 className="mb-4 text-2xl font-bold text-slate-100">
+                    Kaydedilmiş Quiz Sonuçları
+                </h3>
+
+                {quizResults.length === 0 ? (
+                    <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+                        <p className="text-slate-400">
+                            Bu plan için henüz kaydedilmiş quiz sonucu yok.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        {quizResults.map((result) => (
+                            <div
+                                key={result.id}
+                                className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6"
+                            >
+                                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <h4 className="text-lg font-bold text-slate-100">
+                                            {result.quiz_title}
+                                        </h4>
+
+                                        <p className="mt-1 text-sm text-slate-500">
+                                            {result.created_at?.slice(0, 19).replace("T", " ")}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-2xl bg-slate-950/60 px-5 py-3">
+                                        <p className="text-xs text-slate-500">Skor</p>
+                                        <p className="text-xl font-bold text-slate-100">
+                                            {result.correct_count}/{result.total_questions} - %{result.score_percentage}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {result.details_json && (
+                                    <details className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+                                        <summary className="cursor-pointer text-sm font-semibold text-indigo-200">
+                                            Soru ve cevap detaylarını göster
+                                        </summary>
+
+                                        <QuizDetails detailsJson={result.details_json} />
+                                    </details>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </section>
+        </div>
+    );
+}
+
+function QuizDetails({ detailsJson }) {
+    /**
+     * details_json içindeki soru-cevap detaylarını parse edip gösterir.
+     */
+
+    let details = [];
+
+    try {
+        details = JSON.parse(detailsJson);
+    } catch {
+        details = [];
+    }
+
+    if (!details.length) {
+        return (
+            <p className="mt-4 text-sm text-slate-500">
+                Detay verisi okunamadı.
+            </p>
+        );
+    }
+
+    return (
+        <div className="mt-4 space-y-3">
+            {details.map((item) => (
+                <div
+                    key={item.question_number}
+                    className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"
+                >
+                    <p
+                        className={
+                            item.is_correct
+                                ? "text-sm font-bold text-emerald-300"
+                                : "text-sm font-bold text-red-300"
+                        }
+                    >
+                        Soru {item.question_number}: {item.is_correct ? "Doğru" : "Yanlış"}
+                    </p>
+
+                    <p className="mt-3 text-sm font-semibold text-slate-100">
+                        {item.question}
+                    </p>
+
+                    <p className="mt-3 text-sm text-slate-400">
+                        <strong>Senin cevabın:</strong> {item.selected_answer || "Boş"}
+                    </p>
+
+                    <p className="mt-1 text-sm text-slate-400">
+                        <strong>Doğru cevap:</strong> {item.correct_answer}
+                    </p>
+
+                    <p className="mt-3 rounded-xl bg-sky-500/10 p-3 text-sm text-sky-100/80">
+                        {item.explanation}
+                    </p>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+export default PlanDetailPage;
