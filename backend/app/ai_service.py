@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from app.youtube_service import enrich_plan_with_youtube_resources
+
 
 # ============================================================
 # ENV CONFIG
@@ -22,7 +24,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # ============================================================
 # GEMINI CLIENT
 # ============================================================
-# Gemini API istemcisi. API key yoksa fonksiyon çağrıldığında hata vereceğiz.
+# Gemini API istemcisi. API key yoksa fallback akışlarını kullanacağız.
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
@@ -116,13 +118,18 @@ Task metadata rules:
 - estimated_hours for each week should be close to {weekly_hours}.
 
 Resource rules:
-- At least one resource per week should include a real URL.
-- Prefer official documentation URLs when possible.
+- Each week must include at least 2 learning resources.
+- At least one resource per week should include a real URL when possible.
 - If the topic has official documentation, include it as a resource.
+- Prefer official documentation URLs when possible.
 - Prefer reliable, beginner-friendly, and relevant resources.
 - Resource URLs must be real and useful.
 - If you are not sure about the exact URL, use null instead of inventing fake links.
 - Avoid repeating the exact same resources every week unless it is official documentation and still relevant.
+- For each week, include at least one YouTube video resource when it is useful for the topic.
+- If learning_preference is "Video ağırlıklı", include at least one YouTube video resource in every week.
+- YouTube resources must use resource_type: "YouTube Video".
+- YouTube URLs should be real watch URLs such as ...
 
 # 4. Task
 
@@ -190,13 +197,13 @@ Return the output using exactly this JSON structure:
       "resources": [
         {{
           "resource_title": "Kaynak adı",
-          "resource_type": "Video / Dokümantasyon / Makale / Uygulama / Kurs",
+          "resource_type": "Dokümantasyon",
           "resource_description": "Kaynağın neden önerildiği",
           "resource_url": "https://example.com"
         }},
         {{
           "resource_title": "Kaynak adı",
-          "resource_type": "Video / Dokümantasyon / Makale / Uygulama / Kurs",
+          "resource_type": "Makale",
           "resource_description": "Kaynağın neden önerildiği",
           "resource_url": null
         }}
@@ -222,7 +229,6 @@ def parse_gemini_json_response(response_text: str) -> Dict[str, Any]:
 
     cleaned_text = response_text.strip()
 
-    # Model bazen ```json ... ``` şeklinde dönerse temizliyoruz.
     if cleaned_text.startswith("```json"):
         cleaned_text = cleaned_text.replace("```json", "", 1).strip()
 
@@ -236,7 +242,48 @@ def parse_gemini_json_response(response_text: str) -> Dict[str, Any]:
 
 
 # ============================================================
-# MAIN AI FUNCTION
+# LEARNING PLAN FINALIZER
+# ============================================================
+
+def finalize_learning_plan(
+    ai_plan: Dict[str, Any],
+    topic: str,
+    level: str,
+    goal: str,
+    weekly_hours: int,
+    duration_weeks: int,
+    learning_preference: str | None = None
+) -> Dict[str, Any]:
+    """
+    AI veya fallback tarafından üretilen öğrenme planını son haline getirir.
+
+    Bu adımda:
+    - Plan normalize edilir.
+    - Eksik veya bozuk alanlar güvenli hale getirilir.
+    - YouTube Data API aktifse gerçek YouTube kaynakları eklenir.
+    """
+
+    normalized_plan = normalize_learning_plan(
+        ai_plan=ai_plan,
+        topic=topic,
+        level=level,
+        goal=goal,
+        weekly_hours=weekly_hours,
+        duration_weeks=duration_weeks,
+        learning_preference=learning_preference
+    )
+
+    normalized_plan = enrich_plan_with_youtube_resources(
+        plan_data=normalized_plan,
+        topic=topic,
+        learning_preference=learning_preference or "Belirtilmedi"
+    )
+
+    return normalized_plan
+
+
+# ============================================================
+# MAIN LEARNING PLAN FUNCTION
 # ============================================================
 
 def generate_learning_plan_with_gemini(
@@ -253,13 +300,29 @@ def generate_learning_plan_with_gemini(
     Eğer Gemini geçici olarak cevap veremezse:
     - Birkaç kez tekrar dener
     - Yine başarısız olursa fallback plan üretir
-
-    Bu sayede demo sırasında sistem tamamen çökmez.
+    - Hem Gemini çıktısı hem fallback plan YouTube enrichment adımından geçirilir
     """
 
     if client is None:
-        raise RuntimeError(
-            "GEMINI_API_KEY bulunamadı. Lütfen backend/.env dosyasına GEMINI_API_KEY ekle."
+        print("[Gemini Fallback] GEMINI_API_KEY bulunamadı. Fallback plan kullanılacak.")
+
+        fallback_plan = generate_fallback_learning_plan(
+            topic=topic,
+            level=level,
+            goal=goal,
+            weekly_hours=weekly_hours,
+            duration_weeks=duration_weeks,
+            learning_preference=learning_preference
+        )
+
+        return finalize_learning_plan(
+            ai_plan=fallback_plan,
+            topic=topic,
+            level=level,
+            goal=goal,
+            weekly_hours=weekly_hours,
+            duration_weeks=duration_weeks,
+            learning_preference=learning_preference
         )
 
     prompt = build_learning_plan_prompt(
@@ -286,7 +349,7 @@ def generate_learning_plan_with_gemini(
 
             parsed_plan = parse_gemini_json_response(response.text)
 
-            return normalize_learning_plan(
+            return finalize_learning_plan(
                 ai_plan=parsed_plan,
                 topic=topic,
                 level=level,
@@ -301,15 +364,23 @@ def generate_learning_plan_with_gemini(
 
             print(f"[Gemini Error] Attempt {attempt}/{max_retries}: {error_message}")
 
-            # 503, timeout veya geçici servis hatalarında kısa bekleyip tekrar deniyoruz.
             if attempt < max_retries:
                 time.sleep(2 * attempt)
                 continue
 
-            # Son deneme de başarısızsa fallback plan döndürüyoruz.
             print("[Gemini Fallback] Gemini unavailable. Using fallback learning plan.")
 
-            return generate_fallback_learning_plan(
+            fallback_plan = generate_fallback_learning_plan(
+                topic=topic,
+                level=level,
+                goal=goal,
+                weekly_hours=weekly_hours,
+                duration_weeks=duration_weeks,
+                learning_preference=learning_preference
+            )
+
+            return finalize_learning_plan(
+                ai_plan=fallback_plan,
                 topic=topic,
                 level=level,
                 goal=goal,
@@ -319,6 +390,9 @@ def generate_learning_plan_with_gemini(
             )
 
 
+# ============================================================
+# LEARNING PLAN NORMALIZER
+# ============================================================
 
 def normalize_learning_plan(
     ai_plan: Dict[str, Any],
@@ -376,7 +450,6 @@ def normalize_learning_plan(
             learning_preference=learning_preference
         )
 
-    # AI istenenden fazla hafta döndürürse kesiyoruz.
     raw_weeks = raw_weeks[:duration_weeks]
 
     for index, week_data in enumerate(raw_weeks, start=1):
@@ -485,20 +558,26 @@ def normalize_learning_plan(
             if not isinstance(resource_data, dict):
                 resource_data = {}
 
+            resource_url = resource_data.get("resource_url")
+            resource_type = resource_data.get("resource_type") or "Dokümantasyon"
+
+            if isinstance(resource_url, str):
+                lower_url = resource_url.lower()
+
+                if "youtube.com" in lower_url or "youtu.be" in lower_url:
+                    resource_type = "YouTube Video"
+
             normalized_week["resources"].append({
                 "resource_title": (
                     resource_data.get("resource_title")
                     or f"{topic} kaynağı {resource_index}"
                 ),
-                "resource_type": (
-                    resource_data.get("resource_type")
-                    or "Dokümantasyon"
-                ),
+                "resource_type": resource_type,
                 "resource_description": (
                     resource_data.get("resource_description")
                     or f"{topic} öğrenimini destekleyen kaynak."
                 ),
-                "resource_url": resource_data.get("resource_url")
+                "resource_url": resource_url
             })
 
         while len(normalized_week["resources"]) < 2:
@@ -567,6 +646,9 @@ def normalize_learning_plan(
     return normalized_plan
 
 
+# ============================================================
+# FALLBACK LEARNING PLAN
+# ============================================================
 
 def generate_fallback_learning_plan(
     topic: str,
@@ -662,6 +744,10 @@ def generate_fallback_learning_plan(
         "weeks": weeks
     }
 
+
+# ============================================================
+# WEEKLY QUIZ PROMPT BUILDER
+# ============================================================
 
 def build_weekly_quiz_prompt(
     topic: str,
@@ -783,152 +869,6 @@ Return the output using exactly this JSON structure:
 }}
 """
 
-def normalize_quiz_data(
-    quiz_data: Dict[str, Any],
-    topic: str,
-    week_title: str,
-    question_count: int = 5
-) -> Dict[str, Any]:
-    """
-    Gemini'den gelen quiz verisini normalize eder.
-
-    Amaç:
-    - Soru sayısını istenen sayıya tamamlamak
-    - Her soruda tam olarak 4 seçenek olmasını sağlamak
-    - correct_answer değerinin options içinde olmasını garanti etmek
-    - Eksik explanation alanlarını doldurmak
-    - Backend ve Streamlit tarafında bozuk quiz verisi yüzünden hata oluşmasını engellemek
-    """
-
-    # Eğer Gemini beklenen dict formatında veri döndürmezse fallback quiz üretiriz.
-    if not isinstance(quiz_data, dict):
-        return generate_fallback_weekly_quiz(
-            topic=topic,
-            week_title=week_title,
-            question_count=question_count
-        )
-
-    quiz_title = quiz_data.get("quiz_title") or f"{week_title} Quiz"
-    raw_questions = quiz_data.get("questions", [])
-
-    # questions alanı liste değilse fallback quiz kullanırız.
-    if not isinstance(raw_questions, list) or len(raw_questions) == 0:
-        return generate_fallback_weekly_quiz(
-            topic=topic,
-            week_title=week_title,
-            question_count=question_count
-        )
-
-    normalized_questions = []
-
-    # Gemini bazen fazla soru döndürebilir. İstenen sayıya kadar alıyoruz.
-    for index, question_data in enumerate(raw_questions[:question_count], start=1):
-        if not isinstance(question_data, dict):
-            continue
-
-        question_text = (
-            question_data.get("question")
-            or f"{topic} konusunda {index}. teknik değerlendirme sorusu"
-        )
-
-        options = question_data.get("options", [])
-
-        # options liste değilse boş listeye düşürürüz.
-        if not isinstance(options, list):
-            options = []
-
-        # Seçenekleri string'e çevirip boş olanları temizliyoruz.
-        cleaned_options = []
-
-        for option in options:
-            if option is None:
-                continue
-
-            option_text = str(option).strip()
-
-            if option_text and option_text not in cleaned_options:
-                cleaned_options.append(option_text)
-
-        correct_answer = question_data.get("correct_answer")
-
-        if correct_answer is not None:
-            correct_answer = str(correct_answer).strip()
-
-        # correct_answer boşsa ilk seçenekten seçiyoruz.
-        # Bu ideal değil ama bozuk veri yüzünden sistemin patlamasını engeller.
-        if not correct_answer:
-            if cleaned_options:
-                correct_answer = cleaned_options[0]
-            else:
-                correct_answer = f"{topic} ile ilgili doğru teknik yaklaşımı seçmek"
-
-        # correct_answer options içinde yoksa seçeneklere ekliyoruz.
-        if correct_answer not in cleaned_options:
-            cleaned_options.insert(0, correct_answer)
-
-        # Her soruda tam 4 seçenek olmasını sağlıyoruz.
-        fallback_options = [
-            f"{topic} ile ilgili temel kavramları anlamak",
-            f"{topic} için uygulamalı örnek geliştirmek",
-            f"{topic} dokümantasyonunu doğru kullanmak",
-            f"{topic} ile ilgili hata çıktısını analiz etmek"
-        ]
-
-        for fallback_option in fallback_options:
-            if len(cleaned_options) >= 4:
-                break
-
-            if fallback_option not in cleaned_options:
-                cleaned_options.append(fallback_option)
-
-        # Eğer 4'ten fazla seçenek varsa doğru cevabı koruyarak ilk 4'e düşürürüz.
-        if len(cleaned_options) > 4:
-            limited_options = []
-
-            # Doğru cevabın mutlaka options içinde kalmasını garanti ediyoruz.
-            limited_options.append(correct_answer)
-
-            for option in cleaned_options:
-                if option == correct_answer:
-                    continue
-
-                if len(limited_options) >= 4:
-                    break
-
-                limited_options.append(option)
-
-            cleaned_options = limited_options
-
-        explanation = (
-            question_data.get("explanation")
-            or "Bu cevap, haftanın teknik konusu ve görevleriyle doğrudan ilişkilidir."
-        )
-
-        normalized_questions.append({
-            "question": question_text,
-            "options": cleaned_options,
-            "correct_answer": correct_answer,
-            "explanation": explanation
-        })
-
-    # Eğer Gemini istenenden az soru verdiyse fallback quiz sorularıyla tamamlıyoruz.
-    if len(normalized_questions) < question_count:
-        fallback_quiz = generate_fallback_weekly_quiz(
-            topic=topic,
-            week_title=week_title,
-            question_count=question_count
-        )
-
-        for fallback_question in fallback_quiz.get("questions", []):
-            if len(normalized_questions) >= question_count:
-                break
-
-            normalized_questions.append(fallback_question)
-
-    return {
-        "quiz_title": quiz_title,
-        "questions": normalized_questions[:question_count]
-    }
 
 # ============================================================
 # WEEKLY QUIZ NORMALIZER
@@ -968,7 +908,11 @@ def normalize_quiz_data(
 
         text = str(value).strip()
 
-        prefixes = ["A)", "B)", "C)", "D)", "A.", "B.", "C.", "D.", "1)", "2)", "3)", "4)"]
+        prefixes = [
+            "A)", "B)", "C)", "D)",
+            "A.", "B.", "C.", "D.",
+            "1)", "2)", "3)", "4)"
+        ]
 
         for prefix in prefixes:
             if text.startswith(prefix):
@@ -985,8 +929,6 @@ def normalize_quiz_data(
 
         Gemini bazen doğru cevabı direkt seçenek metni olarak değil,
         "A", "B", "C", "D" gibi harf ile döndürebilir.
-
-        Bu durumda ilgili harfin seçenek index'ine karşılık gelen metni doğru cevap yaparız.
         """
 
         if correct_answer is None:
@@ -1017,7 +959,6 @@ def normalize_quiz_data(
 
         return clean_option_text(answer_text)
 
-    # Gemini beklenen dict formatında veri döndürmezse fallback quiz üretiriz.
     if not isinstance(quiz_data, dict):
         return generate_fallback_weekly_quiz(
             topic=topic,
@@ -1028,7 +969,6 @@ def normalize_quiz_data(
     quiz_title = quiz_data.get("quiz_title") or f"{week_title} Quiz"
     raw_questions = quiz_data.get("questions", [])
 
-    # questions alanı liste değilse fallback quiz kullanırız.
     if not isinstance(raw_questions, list) or len(raw_questions) == 0:
         return generate_fallback_weekly_quiz(
             topic=topic,
@@ -1038,7 +978,6 @@ def normalize_quiz_data(
 
     normalized_questions = []
 
-    # Gemini fazla soru döndürürse sadece istenen kadarını alıyoruz.
     for index, question_data in enumerate(raw_questions[:question_count], start=1):
         if not isinstance(question_data, dict):
             continue
@@ -1055,7 +994,6 @@ def normalize_quiz_data(
 
         cleaned_options = []
 
-        # Seçenekleri temizleyip tekrar edenleri çıkarıyoruz.
         for option in raw_options:
             option_text = clean_option_text(option)
 
@@ -1067,11 +1005,9 @@ def normalize_quiz_data(
             cleaned_options
         )
 
-        # Doğru cevabın seçenekler içinde olmasını garanti ediyoruz.
         if correct_answer not in cleaned_options:
             cleaned_options.insert(0, correct_answer)
 
-        # Seçenek sayısı 4'ten azsa teknik ama genel fallback seçeneklerle tamamlıyoruz.
         fallback_options = [
             f"{topic} ile ilgili temel kavramları anlamak",
             f"{topic} için uygulamalı örnek geliştirmek",
@@ -1086,7 +1022,6 @@ def normalize_quiz_data(
             if fallback_option not in cleaned_options:
                 cleaned_options.append(fallback_option)
 
-        # Seçenek sayısı 4'ten fazlaysa doğru cevabı koruyarak 4'e düşürüyoruz.
         if len(cleaned_options) > 4:
             limited_options = [correct_answer]
 
@@ -1113,7 +1048,6 @@ def normalize_quiz_data(
             "explanation": str(explanation).strip()
         })
 
-    # Gemini istenenden az soru döndürürse fallback quiz ile tamamlıyoruz.
     if len(normalized_questions) < question_count:
         fallback_quiz = generate_fallback_weekly_quiz(
             topic=topic,
@@ -1133,6 +1067,10 @@ def normalize_quiz_data(
     }
 
 
+# ============================================================
+# QUIZ OPTION SHUFFLER
+# ============================================================
+
 def shuffle_quiz_options(quiz_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Quiz seçeneklerini karıştırır.
@@ -1140,9 +1078,6 @@ def shuffle_quiz_options(quiz_data: Dict[str, Any]) -> Dict[str, Any]:
     Amaç:
     - Doğru cevabın her zaman ilk seçenek olarak gelmesini engellemek
     - Quiz deneyimini daha gerçekçi hale getirmek
-
-    correct_answer metni değişmez.
-    Sadece options sırası karıştırılır.
     """
 
     questions = quiz_data.get("questions", [])
@@ -1170,6 +1105,10 @@ def shuffle_quiz_options(quiz_data: Dict[str, Any]) -> Dict[str, Any]:
     return quiz_data
 
 
+# ============================================================
+# MAIN WEEKLY QUIZ FUNCTION
+# ============================================================
+
 def generate_weekly_quiz_with_gemini(
     topic: str,
     level: str,
@@ -1187,9 +1126,22 @@ def generate_weekly_quiz_with_gemini(
     """
 
     if client is None:
-        raise RuntimeError(
-            "GEMINI_API_KEY bulunamadı. Lütfen backend/.env dosyasına GEMINI_API_KEY ekle."
+        print("[Gemini Quiz Fallback] GEMINI_API_KEY bulunamadı. Fallback quiz kullanılacak.")
+
+        fallback_quiz = generate_fallback_weekly_quiz(
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
         )
+
+        normalized_fallback_quiz = normalize_quiz_data(
+            quiz_data=fallback_quiz,
+            topic=topic,
+            week_title=week_title,
+            question_count=question_count
+        )
+
+        return shuffle_quiz_options(normalized_fallback_quiz)
 
     prompt = build_weekly_quiz_prompt(
         topic=topic,
@@ -1217,7 +1169,6 @@ def generate_weekly_quiz_with_gemini(
 
             parsed_quiz = parse_gemini_json_response(response.text)
 
-            # Gemini'den gelen quiz verisini önce normalize ediyoruz.
             normalized_quiz = normalize_quiz_data(
                 quiz_data=parsed_quiz,
                 topic=topic,
@@ -1225,7 +1176,6 @@ def generate_weekly_quiz_with_gemini(
                 question_count=question_count
             )
 
-            # Normalize edilen seçenekleri karıştırıyoruz.
             return shuffle_quiz_options(normalized_quiz)
 
         except Exception as e:
@@ -1244,7 +1194,6 @@ def generate_weekly_quiz_with_gemini(
                 question_count=question_count
             )
 
-            # Fallback quiz de aynı güvenli formattan geçiriliyor.
             normalized_fallback_quiz = normalize_quiz_data(
                 quiz_data=fallback_quiz,
                 topic=topic,
@@ -1254,6 +1203,10 @@ def generate_weekly_quiz_with_gemini(
 
             return shuffle_quiz_options(normalized_fallback_quiz)
 
+
+# ============================================================
+# FALLBACK WEEKLY QUIZ
+# ============================================================
 
 def generate_fallback_weekly_quiz(
     topic: str,

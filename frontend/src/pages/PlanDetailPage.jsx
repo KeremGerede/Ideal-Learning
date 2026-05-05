@@ -1,5 +1,6 @@
 // src/pages/PlanDetailPage.jsx
 
+import YouTubeEmbed from "../components/YouTubeEmbed";
 import { useEffect, useState } from "react";
 import {
     getPlanById,
@@ -329,6 +330,12 @@ function PlanDetailPage({ planId, onBack }) {
                                             <p className="mt-3 text-sm leading-6 text-slate-400">
                                                 {resource.resource_description}
                                             </p>
+
+                                            {/* YouTube kaynakları için video önizleme/player gösteriyoruz. */}
+                                            <YouTubeEmbed
+                                                url={resource.resource_url}
+                                                title={resource.resource_title}
+                                            />
 
                                             {resource.resource_url && (
                                                 <a

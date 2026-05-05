@@ -1,5 +1,6 @@
 // src/pages/ResourcesPage.jsx
 
+import YouTubeEmbed from "../components/YouTubeEmbed";
 import { useEffect, useMemo, useState } from "react";
 import { getAllPlans } from "../api/apiClient";
 
@@ -421,6 +422,12 @@ function ResourceCard({ resource }) {
             <p className="mt-4 text-sm leading-6 text-slate-400">
                 {resource.resource_description || "Açıklama bulunamadı."}
             </p>
+
+            {/* YouTube kaynakları için video önizleme/player gösteriyoruz. */}
+            <YouTubeEmbed
+                url={resource.resource_url}
+                title={resource.resource_title}
+            />
 
             <div className="mt-5 grid gap-3 md:grid-cols-2">
                 <div className="rounded-2xl bg-slate-950/60 p-4">
