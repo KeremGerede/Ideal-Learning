@@ -116,6 +116,56 @@ function PlanDetailPage({ planId, onBack }) {
         }
     }
 
+    function getResourceTypeBadge(resourceType) {
+        /**
+         * Kaynak türüne göre rozet metni ve stil bilgisi döndürür.
+         *
+         * Amaç:
+         * - Kaynak kartlarında tür bilgisini daha okunur göstermek
+         * - Dokümantasyon, makale, video ve kurs kaynaklarını görsel olarak ayırmak
+         */
+
+        const normalizedType = String(resourceType || "").toLowerCase();
+
+        if (normalizedType.includes("youtube") || normalizedType.includes("video")) {
+            return {
+                label: "YouTube Video",
+                icon: "🎥",
+                className: "border-red-500/30 bg-red-500/10 text-red-200",
+            };
+        }
+
+        if (normalizedType.includes("dokümantasyon") || normalizedType.includes("dokumantasyon")) {
+            return {
+                label: "Dokümantasyon",
+                icon: "📘",
+                className: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+            };
+        }
+
+        if (normalizedType.includes("makale")) {
+            return {
+                label: "Makale",
+                icon: "📝",
+                className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+            };
+        }
+
+        if (normalizedType.includes("kurs")) {
+            return {
+                label: "Kurs",
+                icon: "🎓",
+                className: "border-purple-500/30 bg-purple-500/10 text-purple-200",
+            };
+        }
+
+        return {
+            label: resourceType || "Kaynak",
+            icon: "🔗",
+            className: "border-slate-700 bg-slate-800/70 text-slate-300",
+        };
+    }
+
     function calculateProgress() {
         /**
          * Plan içindeki görevlerden lokal ilerleme yüzdesi hesaplar.
@@ -434,41 +484,49 @@ function PlanDetailPage({ planId, onBack }) {
                                             </h5>
 
                                             <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                                {weekResources.map((resource) => (
-                                                    <div
-                                                        key={resource.id}
-                                                        className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
-                                                    >
-                                                        <p className="text-sm font-bold text-slate-100">
-                                                            {resource.resource_title}
-                                                        </p>
+                                                {weekResources.map((resource) => {
+                                                    const badge = getResourceTypeBadge(resource.resource_type);
 
-                                                        <p className="mt-1 text-xs text-indigo-300">
-                                                            {resource.resource_type}
-                                                        </p>
+                                                    return (
+                                                        <div
+                                                            key={resource.id}
+                                                            className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
+                                                        >
+                                                            <p className="text-sm font-bold text-slate-100">
+                                                                {resource.resource_title}
+                                                            </p>
 
-                                                        <p className="mt-3 text-sm leading-6 text-slate-400">
-                                                            {resource.resource_description}
-                                                        </p>
-
-                                                        {/* YouTube kaynakları için video player gösteriyoruz. */}
-                                                        <YouTubeEmbed
-                                                            url={resource.resource_url}
-                                                            title={resource.resource_title}
-                                                        />
-
-                                                        {resource.resource_url && (
-                                                            <a
-                                                                href={resource.resource_url}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="mt-4 inline-flex rounded-xl border border-indigo-500/40 px-3 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500 hover:text-white"
+                                                            {/* Kaynak türünü küçük ve okunabilir bir rozet olarak gösteriyoruz. */}
+                                                            <span
+                                                                className={`mt-3 inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold ${badge.className}`}
                                                             >
-                                                                Kaynağı Aç
-                                                            </a>
-                                                        )}
-                                                    </div>
-                                                ))}
+                                                                <span>{badge.icon}</span>
+                                                                <span>{badge.label}</span>
+                                                            </span>
+
+                                                            <p className="mt-4 text-sm leading-6 text-slate-400">
+                                                                {resource.resource_description}
+                                                            </p>
+
+                                                            {/* YouTube kaynakları için video player gösteriyoruz. */}
+                                                            <YouTubeEmbed
+                                                                url={resource.resource_url}
+                                                                title={resource.resource_title}
+                                                            />
+
+                                                            {resource.resource_url && (
+                                                                <a
+                                                                    href={resource.resource_url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    className="mt-4 inline-flex rounded-xl border border-indigo-500/40 px-3 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500 hover:text-white"
+                                                                >
+                                                                    Kaynağı Aç
+                                                                </a>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
 

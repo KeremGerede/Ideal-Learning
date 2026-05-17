@@ -401,6 +401,53 @@ def generate_learning_plan_with_gemini(
 # LEARNING PLAN NORMALIZER
 # ============================================================
 
+def pick_supported_task_text(
+    tasks: list[Dict[str, Any]],
+    resource_index: int,
+    topic: str
+) -> str:
+    """
+    Kaynağın destekleyeceği görev metnini seçer.
+
+    Aynı haftada birden fazla kaynak varsa kaynakları farklı görevlere
+    dağıtmaya çalışır.
+    """
+
+    if not tasks:
+        return f"{topic} konusundaki haftalık teknik görevler"
+
+    task_position = (resource_index - 1) % len(tasks)
+    selected_task = tasks[task_position]
+
+    return selected_task.get("task_text") or f"{topic} konusundaki haftalık teknik görevler"
+
+
+def ensure_task_linked_resource_description(
+    description: str | None,
+    supported_task_text: str,
+    topic: str
+) -> str:
+    """
+    Kaynak açıklamasının bir haftalık görev/konu ile ilişkili olmasını garanti eder.
+
+    Gemini zaten 'Desteklediği görev/konu:' formatında açıklama üretmişse
+    açıklamayı korur. Üretmemişse backend açıklamayı görev odaklı hale getirir.
+    """
+
+    cleaned_description = str(description or "").strip()
+
+    if "desteklediği görev/konu:" in cleaned_description.lower():
+        return cleaned_description
+
+    if not cleaned_description:
+        cleaned_description = f"Bu kaynak {topic} öğrenimini desteklemek için önerilmiştir."
+
+    return (
+        f"Desteklediği görev/konu: {supported_task_text}. "
+        f"{cleaned_description}"
+    )
+
+
 def normalize_learning_plan(
     ai_plan: Dict[str, Any],
     topic: str,
@@ -574,26 +621,44 @@ def normalize_learning_plan(
                 if "youtube.com" in lower_url or "youtu.be" in lower_url:
                     resource_type = "YouTube Video"
 
+            supported_task_text = pick_supported_task_text(
+                tasks=normalized_week["tasks"],
+                resource_index=resource_index,
+                topic=topic
+            )
+
+            resource_description = ensure_task_linked_resource_description(
+                description=resource_data.get("resource_description"),
+                supported_task_text=supported_task_text,
+                topic=topic
+            )
+
             normalized_week["resources"].append({
                 "resource_title": (
                     resource_data.get("resource_title")
                     or f"{topic} kaynağı {resource_index}"
                 ),
                 "resource_type": resource_type,
-                "resource_description": (
-                    resource_data.get("resource_description")
-                    or f"{topic} öğrenimini destekleyen kaynak."
-                ),
+                "resource_description": resource_description,
                 "resource_url": resource_url
             })
 
         while len(normalized_week["resources"]) < 2:
             resource_number = len(normalized_week["resources"]) + 1
 
+            supported_task_text = pick_supported_task_text(
+                tasks=normalized_week["tasks"],
+                resource_index=resource_number,
+                topic=topic
+            )
+
             normalized_week["resources"].append({
                 "resource_title": f"{topic} ek kaynak {resource_number}",
                 "resource_type": "Dokümantasyon",
-                "resource_description": f"{topic} öğrenimini destekleyen ek kaynak.",
+                "resource_description": (
+                    f"Desteklediği görev/konu: {supported_task_text}. "
+                    f"Bu kaynak ilgili haftadaki görevi anlamaya ve uygulamaya yardımcı olur."
+                ),
                 "resource_url": None
             })
 
