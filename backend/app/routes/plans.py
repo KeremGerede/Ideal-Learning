@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app import models, schemas
-from app.ai_service import generate_learning_plan_with_gemini
+from app.ai_service import generate_learning_plan_with_gemini, generate_regenerated_week_with_gemini
+
 
 
 router = APIRouter(
@@ -439,3 +440,144 @@ def delete_plan(
         "message": "Plan başarıyla silindi.",
         "deleted_plan_id": plan_id
     }
+
+
+@router.patch("/{plan_id}/weeks/{week_id}/regenerate", response_model=schemas.PlanResponse)
+def regenerate_plan_week(
+    plan_id: int,
+    week_id: int,
+    request: schemas.RegenerateWeekRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Seçili haftayı AI ile yeniden üretir.
+
+    Bu endpoint:
+    - Sadece seçilen haftayı değiştirir.
+    - Planın diğer haftalarına dokunmaz.
+    - Eski task/resource kayıtlarını siler.
+    - Yeni task/resource kayıtlarını ekler.
+    - İlgili haftaya ait eski quiz sonuçlarını temizler.
+    """
+
+    plan = (
+        db.query(models.LearningPlan)
+        .filter(models.LearningPlan.id == plan_id)
+        .first()
+    )
+
+    if not plan:
+        raise HTTPException(
+            status_code=404,
+            detail="Plan bulunamadı."
+        )
+
+    week = (
+        db.query(models.PlanWeek)
+        .filter(
+            models.PlanWeek.id == week_id,
+            models.PlanWeek.plan_id == plan_id
+        )
+        .first()
+    )
+
+    if not week:
+        raise HTTPException(
+            status_code=404,
+            detail="Hafta bulunamadı."
+        )
+
+    current_tasks = [
+        {
+            "id": task.id,
+            "task_text": task.task_text,
+            "task_type": task.task_type,
+            "estimated_minutes": task.estimated_minutes,
+            "difficulty": task.difficulty,
+            "is_completed": task.is_completed,
+        }
+        for task in week.tasks
+    ]
+
+    current_resources = [
+        {
+            "id": resource.id,
+            "resource_title": resource.resource_title,
+            "resource_type": resource.resource_type,
+            "resource_description": resource.resource_description,
+            "resource_url": resource.resource_url,
+        }
+        for resource in week.resources
+    ]
+
+    regenerated_week = generate_regenerated_week_with_gemini(
+        topic=plan.topic,
+        level=plan.level,
+        goal=plan.goal,
+        weekly_hours=plan.weekly_hours,
+        learning_preference=plan.learning_preference,
+        week_number=week.week_number,
+        current_week_title=week.title,
+        current_week_description=week.description,
+        current_mini_project=week.mini_project,
+        current_tasks=current_tasks,
+        current_resources=current_resources,
+        user_instruction=request.user_instruction,
+    )
+
+    week.title = regenerated_week["title"]
+    week.description = regenerated_week["description"]
+    week.estimated_hours = regenerated_week["estimated_hours"]
+    week.mini_project = regenerated_week["mini_project"]
+
+    for task in list(week.tasks):
+        db.delete(task)
+
+    for resource in list(week.resources):
+        db.delete(resource)
+
+    old_quiz_results = (
+        db.query(models.QuizResult)
+        .filter(
+            models.QuizResult.plan_id == plan_id,
+            models.QuizResult.week_id == week_id
+        )
+        .all()
+    )
+
+    for quiz_result in old_quiz_results:
+        db.delete(quiz_result)
+
+    db.flush()
+
+    for task_data in regenerated_week.get("tasks", []):
+        new_task = models.PlanTask(
+            week_id=week.id,
+            task_text=task_data["task_text"],
+            task_type=task_data["task_type"],
+            estimated_minutes=task_data["estimated_minutes"],
+            difficulty=task_data["difficulty"],
+            is_completed=False,
+        )
+
+        db.add(new_task)
+
+    for resource_data in regenerated_week.get("resources", []):
+        new_resource = models.PlanResource(
+            week_id=week.id,
+            resource_title=resource_data["resource_title"],
+            resource_type=resource_data["resource_type"],
+            resource_description=resource_data["resource_description"],
+            resource_url=resource_data.get("resource_url"),
+        )
+
+        db.add(new_resource)
+
+    db.commit()
+
+    updated_plan = get_plan_with_details(
+        db=db,
+        plan_id=plan_id
+    )
+
+    return updated_plan

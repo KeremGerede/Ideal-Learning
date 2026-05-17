@@ -816,6 +816,455 @@ def generate_fallback_learning_plan(
         "weeks": weeks
     }
 
+def build_regenerate_week_prompt(
+    topic: str,
+    level: str,
+    goal: str,
+    weekly_hours: int,
+    learning_preference: str | None,
+    week_number: int,
+    current_week_title: str,
+    current_week_description: str | None,
+    current_mini_project: str | None,
+    current_tasks: list[dict],
+    current_resources: list[dict],
+    user_instruction: str | None = None
+) -> str:
+    """
+    Mevcut bir haftayı AI ile yeniden düzenlemek için prompt oluşturur.
+
+    Amaç:
+    - Sadece seçili haftayı yenilemek
+    - Planın diğer haftalarına dokunmamak
+    - Daha teknik, görev odaklı ve kaynakları görevlerle ilişkili bir hafta üretmek
+    """
+
+    current_tasks_text = "\n".join(
+        [
+            f"- {task.get('task_text', '')}"
+            for task in current_tasks
+        ]
+    )
+
+    current_resources_text = "\n".join(
+        [
+            f"- {resource.get('resource_title', '')}: {resource.get('resource_description', '')}"
+            for resource in current_resources
+        ]
+    )
+
+    return f"""
+# 1. Context
+
+You are updating one selected week of an existing AI-powered personalized learning plan.
+
+The full plan already exists in the database. You must regenerate only week {week_number}. Other weeks must not be changed.
+
+The updated week will replace the old week content in the database. Therefore, the output must be consistent, structured, technical, and easy to parse.
+
+# 2. Role
+
+Act as an expert AI learning coach, technical mentor, and curriculum designer.
+
+You should improve the selected week by making it more useful, technical, actionable, and aligned with the user's learning goal.
+
+# 3. Constraints
+
+- Return only valid JSON.
+- Do not use Markdown.
+- Do not add explanations outside the JSON.
+- The JSON must be parseable by Python's json.loads().
+- All generated content must be written in Turkish.
+- Regenerate only week {week_number}.
+- Do not generate a full learning plan.
+- The week must include at least 4 tasks.
+- The week must include at least 2 learning resources.
+- The week must include exactly one mini_project field.
+- Do not include the mini project as a task.
+- Tasks must be technical, concrete, measurable, and topic-specific.
+- Avoid generic tasks such as "konuyu çalış", "video izle", "araştırma yap", "not al", or "tekrar et" unless they include specific technical subtopics.
+- Each task_text must include concrete concepts, tools, commands, APIs, implementation targets, debugging steps, or practice outputs related to the selected topic.
+- task_type must be one of: "Teori", "Uygulama", "Proje", "Tekrar", "Araştırma".
+- difficulty must be one of: "Kolay", "Orta", "Zor".
+- estimated_minutes must be a positive integer.
+- estimated_hours should be close to {weekly_hours}.
+- Resources must be directly related to the week's tasks, week title, or mini project.
+- Each resource_description must clearly mention which task or subtopic it supports.
+- Use this style in resource_description: "Desteklediği görev/konu: ... Bu kaynak ..."
+- Do not create YouTube resources.
+- Do not create video resources with resource_type such as "Video", "Video Ders", "YouTube Video", or "Video / Kurs".
+- YouTube video resources will be added separately by the backend using YouTube Data API.
+
+# 4. Existing Week Data
+
+Plan information:
+
+- topic: "{topic}"
+- current_level: "{level}"
+- learning_goal: "{goal}"
+- weekly_hours: {weekly_hours}
+- learning_preference: "{learning_preference or "Belirtilmedi"}"
+
+Selected week:
+
+- week_number: {week_number}
+- current_week_title: "{current_week_title}"
+- current_week_description: "{current_week_description or "No description"}"
+- current_mini_project: "{current_mini_project or "No mini project"}"
+
+Current tasks:
+
+{current_tasks_text or "- No current tasks"}
+
+Current resources:
+
+{current_resources_text or "- No current resources"}
+
+User instruction for this regeneration:
+
+"{user_instruction or "Bu haftayı daha teknik, görev odaklı ve kaynakları görevlerle ilişkili olacak şekilde iyileştir."}"
+
+# 5. Task
+
+Regenerate only this selected week.
+
+The updated week should fit the existing plan, user's level, learning goal, weekly study hours, and learning preference.
+
+# 6. Output Control
+
+Return exactly this JSON structure:
+
+{{
+  "week_number": {week_number},
+  "title": "Güncellenmiş hafta başlığı",
+  "description": "Bu haftanın güncellenmiş kısa açıklaması",
+  "estimated_hours": {weekly_hours},
+  "mini_project": "Bu haftanın sonunda yapılacak teknik mini proje veya uygulama önerisi",
+  "tasks": [
+    {{
+      "task_text": "Konuya özel teknik görev açıklaması",
+      "task_type": "Teori",
+      "estimated_minutes": 60,
+      "difficulty": "Kolay"
+    }},
+    {{
+      "task_text": "Konuya özel uygulamalı görev açıklaması",
+      "task_type": "Uygulama",
+      "estimated_minutes": 90,
+      "difficulty": "Orta"
+    }},
+    {{
+      "task_text": "Konuya özel tekrar veya analiz görevi",
+      "task_type": "Tekrar",
+      "estimated_minutes": 45,
+      "difficulty": "Kolay"
+    }},
+    {{
+      "task_text": "Konuya özel proje veya entegrasyon görevi",
+      "task_type": "Proje",
+      "estimated_minutes": 120,
+      "difficulty": "Orta"
+    }}
+  ],
+  "resources": [
+    {{
+      "resource_title": "Kaynak adı",
+      "resource_type": "Dokümantasyon",
+      "resource_description": "Desteklediği görev/konu: Bu haftadaki belirli görev veya teknik alt konu. Bu kaynak ilgili görevi anlamaya veya uygulamaya yardımcı olur.",
+      "resource_url": "https://example.com"
+    }},
+    {{
+      "resource_title": "Kaynak adı",
+      "resource_type": "Makale",
+      "resource_description": "Desteklediği görev/konu: Bu haftadaki belirli görev veya teknik alt konu. Bu kaynak ilgili görevi anlamaya veya uygulamaya yardımcı olur.",
+      "resource_url": null
+    }}
+  ]
+}}
+"""
+
+def generate_regenerated_week_with_gemini(
+    topic: str,
+    level: str,
+    goal: str,
+    weekly_hours: int,
+    learning_preference: str | None,
+    week_number: int,
+    current_week_title: str,
+    current_week_description: str | None,
+    current_mini_project: str | None,
+    current_tasks: list[dict],
+    current_resources: list[dict],
+    user_instruction: str | None = None
+) -> Dict[str, Any]:
+    """
+    Seçili haftayı Gemini ile yeniden üretir.
+
+    Gemini hata verirse fallback olarak mevcut haftaya benzer,
+    teknik ve güvenli bir hafta yapısı döndürür.
+    """
+
+    prompt = build_regenerate_week_prompt(
+        topic=topic,
+        level=level,
+        goal=goal,
+        weekly_hours=weekly_hours,
+        learning_preference=learning_preference,
+        week_number=week_number,
+        current_week_title=current_week_title,
+        current_week_description=current_week_description,
+        current_mini_project=current_mini_project,
+        current_tasks=current_tasks,
+        current_resources=current_resources,
+        user_instruction=user_instruction
+    )
+
+    if client is None:
+        return generate_fallback_regenerated_week(
+            topic=topic,
+            weekly_hours=weekly_hours,
+            week_number=week_number,
+            user_instruction=user_instruction
+        )
+
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.4
+                )
+            )
+
+            parsed_week = parse_gemini_json_response(response.text)
+
+            return normalize_regenerated_week(
+                week_data=parsed_week,
+                topic=topic,
+                weekly_hours=weekly_hours,
+                week_number=week_number
+            )
+
+        except Exception as error:
+            print(f"[Gemini Week Regenerate Error] Attempt {attempt}/{max_retries}: {error}")
+
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+                continue
+
+            return generate_fallback_regenerated_week(
+                topic=topic,
+                weekly_hours=weekly_hours,
+                week_number=week_number,
+                user_instruction=user_instruction
+            )
+
+def normalize_regenerated_week(
+    week_data: Dict[str, Any],
+    topic: str,
+    weekly_hours: int,
+    week_number: int
+) -> Dict[str, Any]:
+    """
+    AI tarafından yeniden üretilen haftayı güvenli hale getirir.
+    """
+
+    allowed_task_types = {"Teori", "Uygulama", "Proje", "Tekrar", "Araştırma"}
+    allowed_difficulties = {"Kolay", "Orta", "Zor"}
+
+    if not isinstance(week_data, dict):
+        return generate_fallback_regenerated_week(
+            topic=topic,
+            weekly_hours=weekly_hours,
+            week_number=week_number
+        )
+
+    normalized_week = {
+        "week_number": week_number,
+        "title": week_data.get("title") or f"{topic} - Hafta {week_number}",
+        "description": week_data.get("description") or (
+            f"Bu hafta {topic} konusunda teknik ve uygulanabilir çalışmalar yapılacaktır."
+        ),
+        "estimated_hours": week_data.get("estimated_hours") or weekly_hours,
+        "mini_project": week_data.get("mini_project") or (
+            f"{topic} ile ilgili küçük ve uygulanabilir bir mini proje geliştir."
+        ),
+        "tasks": [],
+        "resources": []
+    }
+
+    raw_tasks = week_data.get("tasks", [])
+
+    if not isinstance(raw_tasks, list):
+        raw_tasks = []
+
+    for task_index, task_data in enumerate(raw_tasks, start=1):
+        if not isinstance(task_data, dict):
+            task_data = {}
+
+        task_type = task_data.get("task_type") or "Uygulama"
+        difficulty = task_data.get("difficulty") or "Orta"
+        estimated_minutes = task_data.get("estimated_minutes") or 60
+
+        if task_type not in allowed_task_types:
+            task_type = "Uygulama"
+
+        if difficulty not in allowed_difficulties:
+            difficulty = "Orta"
+
+        try:
+            estimated_minutes = int(estimated_minutes)
+        except (TypeError, ValueError):
+            estimated_minutes = 60
+
+        if estimated_minutes <= 0:
+            estimated_minutes = 60
+
+        normalized_week["tasks"].append({
+            "task_text": (
+                task_data.get("task_text")
+                or f"{topic} konusunda teknik görev {task_index} tamamla."
+            ),
+            "task_type": task_type,
+            "estimated_minutes": estimated_minutes,
+            "difficulty": difficulty
+        })
+
+    while len(normalized_week["tasks"]) < 4:
+        task_number = len(normalized_week["tasks"]) + 1
+
+        normalized_week["tasks"].append({
+            "task_text": f"{topic} konusunda teknik uygulama görevi {task_number} tamamla.",
+            "task_type": "Uygulama",
+            "estimated_minutes": 60,
+            "difficulty": "Orta"
+        })
+
+    raw_resources = week_data.get("resources", [])
+
+    if not isinstance(raw_resources, list):
+        raw_resources = []
+
+    for resource_index, resource_data in enumerate(raw_resources, start=1):
+        if not isinstance(resource_data, dict):
+            resource_data = {}
+
+        supported_task_text = pick_supported_task_text(
+            tasks=normalized_week["tasks"],
+            resource_index=resource_index,
+            topic=topic
+        )
+
+        resource_description = ensure_task_linked_resource_description(
+            description=resource_data.get("resource_description"),
+            supported_task_text=supported_task_text,
+            topic=topic
+        )
+
+        normalized_week["resources"].append({
+            "resource_title": (
+                resource_data.get("resource_title")
+                or f"{topic} kaynağı {resource_index}"
+            ),
+            "resource_type": resource_data.get("resource_type") or "Dokümantasyon",
+            "resource_description": resource_description,
+            "resource_url": resource_data.get("resource_url")
+        })
+
+    while len(normalized_week["resources"]) < 2:
+        resource_number = len(normalized_week["resources"]) + 1
+
+        supported_task_text = pick_supported_task_text(
+            tasks=normalized_week["tasks"],
+            resource_index=resource_number,
+            topic=topic
+        )
+
+        normalized_week["resources"].append({
+            "resource_title": f"{topic} ek kaynak {resource_number}",
+            "resource_type": "Dokümantasyon",
+            "resource_description": (
+                f"Desteklediği görev/konu: {supported_task_text}. "
+                f"Bu kaynak ilgili haftadaki görevi anlamaya ve uygulamaya yardımcı olur."
+            ),
+            "resource_url": None
+        })
+
+    return normalized_week
+
+def generate_fallback_regenerated_week(
+    topic: str,
+    weekly_hours: int,
+    week_number: int,
+    user_instruction: str | None = None
+) -> Dict[str, Any]:
+    """
+    Gemini çalışmazsa seçili hafta için güvenli fallback içerik üretir.
+    """
+
+    instruction_text = user_instruction or "teknik ve uygulanabilir"
+
+    return {
+        "week_number": week_number,
+        "title": f"{topic} - Güncellenmiş Hafta {week_number}",
+        "description": (
+            f"Bu hafta {topic} konusunda {instruction_text} odaklı çalışmalar yapılacaktır."
+        ),
+        "estimated_hours": weekly_hours,
+        "mini_project": (
+            f"{topic} konusunda bu haftanın görevlerini birleştiren küçük bir uygulama geliştir."
+        ),
+        "tasks": [
+            {
+                "task_text": f"{topic} konusunda bu haftanın ana teknik kavramlarını örneklerle incele.",
+                "task_type": "Teori",
+                "estimated_minutes": 60,
+                "difficulty": "Orta"
+            },
+            {
+                "task_text": f"{topic} için küçük bir uygulama senaryosu oluştur ve temel akışı kodla.",
+                "task_type": "Uygulama",
+                "estimated_minutes": 90,
+                "difficulty": "Orta"
+            },
+            {
+                "task_text": f"{topic} çalışmasında oluşabilecek hata durumlarını analiz et ve çözüm notları çıkar.",
+                "task_type": "Tekrar",
+                "estimated_minutes": 45,
+                "difficulty": "Orta"
+            },
+            {
+                "task_text": f"{topic} ile ilgili haftalık mini projeyi tamamla ve çıktıyı test et.",
+                "task_type": "Proje",
+                "estimated_minutes": 120,
+                "difficulty": "Zor"
+            }
+        ],
+        "resources": [
+            {
+                "resource_title": f"{topic} resmi dokümantasyonu",
+                "resource_type": "Dokümantasyon",
+                "resource_description": (
+                    f"Desteklediği görev/konu: {topic} konusunda bu haftanın ana teknik kavramlarını örneklerle incele. "
+                    f"Bu kaynak resmi veya temel teknik referans olarak kullanılabilir."
+                ),
+                "resource_url": None
+            },
+            {
+                "resource_title": f"{topic} uygulama kaynağı",
+                "resource_type": "Makale",
+                "resource_description": (
+                    f"Desteklediği görev/konu: {topic} için küçük bir uygulama senaryosu oluştur ve temel akışı kodla. "
+                    f"Bu kaynak uygulama odaklı ilerlemeye yardımcı olur."
+                ),
+                "resource_url": None
+            }
+        ]
+    }
 
 # ============================================================
 # WEEKLY QUIZ PROMPT BUILDER

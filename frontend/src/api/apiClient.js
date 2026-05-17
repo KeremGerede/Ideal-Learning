@@ -210,3 +210,24 @@ export async function getAllQuizResults() {
 
     return response.json();
 }
+
+export async function regeneratePlanWeek(planId, weekId, userInstruction) {
+    const response = await fetch(
+        `${API_BASE_URL}/plans/${planId}/weeks/${weekId}/regenerate`,
+        {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                user_instruction: userInstruction,
+            }),
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error("Hafta AI ile yeniden oluşturulamadı.");
+    }
+
+    return response.json();
+}

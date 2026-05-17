@@ -133,3 +133,18 @@ class QuizResultResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RegenerateWeekRequest(BaseModel):
+    """
+    Seçili haftayı AI ile yeniden düzenlemek için kullanılan request modeli.
+
+    user_instruction:
+    Kullanıcının o hafta için özel isteğini tutar.
+    Örnek:
+    - "Bu haftayı daha uygulama ağırlıklı yap."
+    - "Kaynakları daha teknik hale getir."
+    - "Görevleri ileri seviyeye çek."
+    """
+
+    user_instruction: Optional[str] = None
