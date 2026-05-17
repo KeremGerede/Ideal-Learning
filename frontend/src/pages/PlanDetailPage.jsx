@@ -27,6 +27,14 @@ function PlanDetailPage({ planId, onBack }) {
     const [loading, setLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState("");
 
+    // Checkbox güncellenirken sadece ilgili görevi kilitlemek için kullanılır.
+    // Böylece tüm sayfa tekrar yüklenmez.
+    const [updatingTaskIds, setUpdatingTaskIds] = useState([]);
+
+    // Haftaları accordion şeklinde açıp kapatmak için kullanılır.
+    // İlk plan yüklendiğinde varsayılan olarak ilk hafta açık olacak.
+    const [openWeekIds, setOpenWeekIds] = useState([]);
+
     async function loadPlanDetail() {
         /**
          * Plan detayını ve bu plana ait quiz sonuçlarını backend'den çeker.
@@ -53,6 +61,19 @@ function PlanDetailPage({ planId, onBack }) {
 
             setPlan(planData);
             setQuizResults(quizData);
+
+            // Plan ilk yüklendiğinde sadece ilk haftayı açık yapıyoruz.
+            // Kullanıcı daha sonra hafta açıp kapattıysa mevcut accordion durumunu koruyoruz.
+            setOpenWeekIds((previousOpenWeekIds) => {
+                if (previousOpenWeekIds.length > 0) {
+                    return previousOpenWeekIds;
+                }
+
+                const firstWeekId = planData.weeks?.[0]?.id;
+
+                return firstWeekId ? [firstWeekId] : [];
+            });
+
         } catch (error) {
             setErrorMessage(error.message || "Plan detayı alınırken hata oluştu.");
         } finally {
@@ -63,14 +84,35 @@ function PlanDetailPage({ planId, onBack }) {
     async function handleTaskToggle(taskId, isCompleted) {
         /**
          * Görev checkbox değiştiğinde backend'e güncelleme gönderir.
-         * Güncellemeden sonra plan detayını tekrar yükleriz.
+         *
+         * Önemli:
+         * - Artık loadPlanDetail() çağırmıyoruz.
+         * - Çünkü tüm sayfayı yeniden yüklemek scroll pozisyonunu en üste atıyordu.
+         * - Bunun yerine sadece ilgili görevi local state içinde güncelliyoruz.
          */
 
+        const previousPlan = plan;
+
         try {
+            setErrorMessage("");
+
+            setUpdatingTaskIds((previousIds) => [
+                ...new Set([...previousIds, taskId]),
+            ]);
+
+            // Önce UI tarafında hızlıca güncelliyoruz.
+            updateTaskInLocalPlan(taskId, isCompleted);
+
+            // Sonra backend'e kalıcı olarak kaydediyoruz.
             await updateTaskCompletion(taskId, isCompleted);
-            await loadPlanDetail();
         } catch (error) {
+            // Backend hata verirse eski plan state'ine geri dönüyoruz.
+            setPlan(previousPlan);
             setErrorMessage(error.message || "Görev durumu güncellenemedi.");
+        } finally {
+            setUpdatingTaskIds((previousIds) =>
+                previousIds.filter((id) => id !== taskId)
+            );
         }
     }
 
@@ -98,6 +140,52 @@ function PlanDetailPage({ planId, onBack }) {
             completedTasks,
             percentage: Math.round((completedTasks / tasks.length) * 100),
         };
+    }
+
+    function updateTaskInLocalPlan(taskId, isCompleted) {
+        /**
+         * Checkbox değiştiğinde tüm plan detayını yeniden çekmek yerine
+         * sadece ilgili görevi local React state içinde günceller.
+         *
+         * Bu sayede sayfa loading ekranına düşmez ve en üste atmaz.
+         */
+
+        setPlan((previousPlan) => {
+            if (!previousPlan) {
+                return previousPlan;
+            }
+
+            return {
+                ...previousPlan,
+                weeks: previousPlan.weeks.map((week) => ({
+                    ...week,
+                    tasks: (week.tasks || []).map((task) => {
+                        if (task.id !== taskId) {
+                            return task;
+                        }
+
+                        return {
+                            ...task,
+                            is_completed: isCompleted,
+                        };
+                    }),
+                })),
+            };
+        });
+    }
+
+    function toggleWeek(weekId) {
+        /**
+         * Haftayı accordion mantığıyla açıp kapatır.
+         */
+
+        setOpenWeekIds((previousOpenWeekIds) => {
+            if (previousOpenWeekIds.includes(weekId)) {
+                return previousOpenWeekIds.filter((id) => id !== weekId);
+            }
+
+            return [...previousOpenWeekIds, weekId];
+        });
     }
 
     useEffect(() => {
@@ -233,131 +321,168 @@ function PlanDetailPage({ planId, onBack }) {
                 </h3>
 
                 <div className="space-y-5">
-                    {plan.weeks?.map((week) => (
-                        <div
-                            key={week.id}
-                            className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6"
-                        >
-                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                    <p className="text-sm font-semibold text-indigo-300">
-                                        Hafta {week.week_number}
-                                    </p>
+                    {plan.weeks?.map((week) => {
+                        const isWeekOpen = openWeekIds.includes(week.id);
+                        const weekTasks = week.tasks || [];
+                        const completedWeekTasks = weekTasks.filter((task) => task.is_completed).length;
+                        const weekResources = week.resources || [];
 
-                                    <h4 className="mt-1 text-2xl font-bold text-slate-50">
-                                        {week.title}
-                                    </h4>
-                                </div>
+                        return (
+                            <div
+                                key={week.id}
+                                className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6"
+                            >
+                                {/* Accordion başlığı */}
+                                <button
+                                    type="button"
+                                    onClick={() => toggleWeek(week.id)}
+                                    className="flex w-full flex-col gap-4 text-left md:flex-row md:items-start md:justify-between"
+                                >
+                                    <div>
+                                        <p className="text-sm font-semibold text-indigo-300">
+                                            Hafta {week.week_number}
+                                        </p>
 
-                                <span className="w-fit rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-300">
-                                    {week.estimated_hours || plan.weekly_hours} saat
-                                </span>
-                            </div>
+                                        <h4 className="mt-1 text-2xl font-bold text-slate-50">
+                                            {week.title}
+                                        </h4>
 
-                            <p className="mt-4 text-sm leading-6 text-slate-400">
-                                {week.description}
-                            </p>
+                                        <p className="mt-2 text-sm text-slate-500">
+                                            {completedWeekTasks}/{weekTasks.length} görev tamamlandı ·{" "}
+                                            {weekResources.length} kaynak
+                                        </p>
+                                    </div>
 
-                            {week.mini_project && (
-                                <div className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 p-4">
-                                    <p className="text-sm font-semibold text-sky-200">
-                                        Mini Proje
-                                    </p>
-                                    <p className="mt-2 text-sm leading-6 text-sky-100/80">
-                                        {week.mini_project}
-                                    </p>
-                                </div>
-                            )}
+                                    <div className="flex items-center gap-3">
+                                        <span className="w-fit rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-300">
+                                            {week.estimated_hours || plan.weekly_hours} saat
+                                        </span>
 
-                            {/* Görevler */}
-                            <div className="mt-6">
-                                <h5 className="font-bold text-slate-100">Görevler</h5>
+                                        <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-700 bg-slate-950 text-lg text-slate-300">
+                                            {isWeekOpen ? "−" : "+"}
+                                        </span>
+                                    </div>
+                                </button>
 
-                                <div className="mt-3 space-y-3">
-                                    {week.tasks?.map((task) => (
-                                        <label
-                                            key={task.id}
-                                            className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 transition hover:border-indigo-500/50"
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={Boolean(task.is_completed)}
-                                                onChange={(event) =>
-                                                    handleTaskToggle(task.id, event.target.checked)
-                                                }
-                                                className="mt-1 h-4 w-4 accent-indigo-500"
-                                            />
+                                {/* Accordion içeriği */}
+                                {isWeekOpen && (
+                                    <div className="mt-6">
+                                        <p className="text-sm leading-6 text-slate-400">
+                                            {week.description}
+                                        </p>
 
-                                            <div className="flex-1">
-                                                <p
-                                                    className={
-                                                        task.is_completed
-                                                            ? "text-sm font-semibold text-slate-500 line-through"
-                                                            : "text-sm font-semibold text-slate-100"
-                                                    }
-                                                >
-                                                    {task.task_text}
+                                        {week.mini_project && (
+                                            <div className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 p-4">
+                                                <p className="text-sm font-semibold text-sky-200">
+                                                    Mini Proje
                                                 </p>
 
-                                                <p className="mt-2 text-xs text-slate-500">
-                                                    {task.task_type || "Görev"} | {task.estimated_minutes || 0} dk |{" "}
-                                                    {task.difficulty || "Orta"}
+                                                <p className="mt-2 text-sm leading-6 text-sky-100/80">
+                                                    {week.mini_project}
                                                 </p>
                                             </div>
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
+                                        )}
 
-                            {/* Kaynaklar */}
-                            <div className="mt-6">
-                                <h5 className="font-bold text-slate-100">Kaynaklar</h5>
+                                        {/* Görevler */}
+                                        <div className="mt-6">
+                                            <h5 className="font-bold text-slate-100">
+                                                Görevler
+                                            </h5>
 
-                                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                    {week.resources?.map((resource) => (
-                                        <div
-                                            key={resource.id}
-                                            className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
-                                        >
-                                            <p className="text-sm font-bold text-slate-100">
-                                                {resource.resource_title}
-                                            </p>
+                                            <div className="mt-3 space-y-3">
+                                                {weekTasks.map((task) => (
+                                                    <label
+                                                        key={task.id}
+                                                        className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 transition hover:border-indigo-500/50"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Boolean(task.is_completed)}
+                                                            disabled={updatingTaskIds.includes(task.id)}
+                                                            onChange={(event) =>
+                                                                handleTaskToggle(task.id, event.target.checked)
+                                                            }
+                                                            className="mt-1 h-4 w-4 accent-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        />
 
-                                            <p className="mt-1 text-xs text-indigo-300">
-                                                {resource.resource_type}
-                                            </p>
+                                                        <div className="flex-1">
+                                                            <p
+                                                                className={
+                                                                    task.is_completed
+                                                                        ? "text-sm font-semibold text-slate-500 line-through"
+                                                                        : "text-sm font-semibold text-slate-100"
+                                                                }
+                                                            >
+                                                                {task.task_text}
+                                                            </p>
 
-                                            <p className="mt-3 text-sm leading-6 text-slate-400">
-                                                {resource.resource_description}
-                                            </p>
-
-                                            {/* YouTube kaynakları için video önizleme/player gösteriyoruz. */}
-                                            <YouTubeEmbed
-                                                url={resource.resource_url}
-                                                title={resource.resource_title}
-                                            />
-
-                                            {resource.resource_url && (
-                                                <a
-                                                    href={resource.resource_url}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="mt-4 inline-flex rounded-xl border border-indigo-500/40 px-3 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500 hover:text-white"
-                                                >
-                                                    Kaynağı Aç
-                                                </a>
-                                            )}
+                                                            <p className="mt-2 text-xs text-slate-500">
+                                                                {task.task_type || "Görev"} |{" "}
+                                                                {task.estimated_minutes || 0} dk |{" "}
+                                                                {task.difficulty || "Orta"}
+                                                            </p>
+                                                        </div>
+                                                    </label>
+                                                ))}
+                                            </div>
                                         </div>
-                                    ))}
-                                </div>
+
+                                        {/* Kaynaklar */}
+                                        <div className="mt-6">
+                                            <h5 className="font-bold text-slate-100">
+                                                Kaynaklar
+                                            </h5>
+
+                                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                                {weekResources.map((resource) => (
+                                                    <div
+                                                        key={resource.id}
+                                                        className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
+                                                    >
+                                                        <p className="text-sm font-bold text-slate-100">
+                                                            {resource.resource_title}
+                                                        </p>
+
+                                                        <p className="mt-1 text-xs text-indigo-300">
+                                                            {resource.resource_type}
+                                                        </p>
+
+                                                        <p className="mt-3 text-sm leading-6 text-slate-400">
+                                                            {resource.resource_description}
+                                                        </p>
+
+                                                        {/* YouTube kaynakları için video player gösteriyoruz. */}
+                                                        <YouTubeEmbed
+                                                            url={resource.resource_url}
+                                                            title={resource.resource_title}
+                                                        />
+
+                                                        {resource.resource_url && (
+                                                            <a
+                                                                href={resource.resource_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="mt-4 inline-flex rounded-xl border border-indigo-500/40 px-3 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500 hover:text-white"
+                                                            >
+                                                                Kaynağı Aç
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Haftalık quiz oluşturma ve çözme paneli */}
+                                        <WeeklyQuizPanel
+                                            planId={plan.id}
+                                            week={week}
+                                            onQuizSaved={loadPlanDetail}
+                                        />
+                                    </div>
+                                )}
                             </div>
-                            <WeeklyQuizPanel
-                                planId={plan.id}
-                                week={week}
-                                onQuizSaved={loadPlanDetail}
-                            />
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </section>
 

@@ -119,17 +119,22 @@ Task metadata rules:
 
 Resource rules:
 - Each week must include at least 2 learning resources.
+- Resources must be directly related to that week's tasks, week title, or mini project.
+- Avoid generic resources that are not connected to the weekly tasks.
+- Each resource should support at least one specific task or subtopic from that week.
+- Each resource_description must clearly mention which task or subtopic it supports.
+- Use this style in resource_description: "Desteklediği görev/konu: ... Bu kaynak ..."
 - At least one resource per week should include a real URL when possible.
-- If the topic has official documentation, include it as a resource.
+- If the topic has official documentation, include it as a resource only when it supports a specific weekly task.
 - Prefer official documentation URLs when possible.
 - Prefer reliable, beginner-friendly, and relevant resources.
 - Resource URLs must be real and useful.
 - If you are not sure about the exact URL, use null instead of inventing fake links.
-- Avoid repeating the exact same resources every week unless it is official documentation and still relevant.
-- For each week, include at least one YouTube video resource when it is useful for the topic.
-- If learning_preference is "Video ağırlıklı", include at least one YouTube video resource in every week.
-- YouTube resources must use resource_type: "YouTube Video".
-- YouTube URLs should be real watch URLs such as ...
+- Avoid repeating the exact same resources every week unless it is official documentation and still relevant to that week's tasks.
+- Do not create YouTube resources.
+- Do not create video resources with resource_type such as "Video", "Video Ders", "YouTube Video", or "Video / Kurs".
+- YouTube video resources will be added separately by the backend using YouTube Data API.
+- If learning_preference is "Video ağırlıklı", the backend will try to add real YouTube video resources automatically.
 
 # 4. Task
 
@@ -198,13 +203,13 @@ Return the output using exactly this JSON structure:
         {{
           "resource_title": "Kaynak adı",
           "resource_type": "Dokümantasyon",
-          "resource_description": "Kaynağın neden önerildiği",
+          "resource_description": "Desteklediği görev/konu: Bu haftadaki belirli görev veya teknik alt konu. Bu kaynak ilgili görevi anlamaya veya uygulamaya yardımcı olur.",
           "resource_url": "https://example.com"
         }},
         {{
           "resource_title": "Kaynak adı",
           "resource_type": "Makale",
-          "resource_description": "Kaynağın neden önerildiği",
+          "resource_description": "Desteklediği görev/konu: Bu haftadaki belirli görev veya teknik alt konu. Bu kaynak ilgili görevi anlamaya veya uygulamaya yardımcı olur.",
           "resource_url": null
         }}
       ]
@@ -276,6 +281,8 @@ def finalize_learning_plan(
     normalized_plan = enrich_plan_with_youtube_resources(
         plan_data=normalized_plan,
         topic=topic,
+        level=level,
+        goal=goal,
         learning_preference=learning_preference or "Belirtilmedi"
     )
 
