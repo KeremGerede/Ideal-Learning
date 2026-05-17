@@ -231,3 +231,23 @@ export async function regeneratePlanWeek(planId, weekId, userInstruction) {
 
     return response.json();
 }
+
+
+export async function getLearningRecommendations(limit = 6) {
+    /**
+     * Önceki öğrenme planlarına göre Gemini destekli öğrenme önerilerini getirir.
+     *
+     * Backend endpoint:
+     * GET /recommendations/?limit=6
+     */
+
+    const response = await fetch(
+        `${API_BASE_URL}/recommendations/?limit=${limit}`
+    );
+
+    if (!response.ok) {
+        throw new Error("Öğrenme önerileri alınamadı.");
+    }
+
+    return response.json();
+}

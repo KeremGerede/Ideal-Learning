@@ -1,47 +1,98 @@
 // src/pages/DashboardPage.jsx
 
 import { useEffect, useState } from "react";
-import { getHealthStatus, getStatsOverview } from "../api/apiClient";
+import {
+    getHealthStatus,
+    getStatsOverview,
+    getLearningRecommendations,
+} from "../api/apiClient";
 import StatCard from "../components/StatCard";
 
 function DashboardPage() {
+    /**
+     * Dashboard sayfası.
+     *
+     * Bu sayfada:
+     * - Backend sağlık durumu
+     * - Genel plan/görev istatistikleri
+     * - Quiz istatistikleri
+     * - Önceki planlara göre Gemini destekli öğrenme önerileri
+     * gösterilir.
+     */
+
     const [health, setHealth] = useState(null);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState("");
 
-    useEffect(() => {
+    // Gemini destekli öneri sistemi için state alanları.
+    const [recommendations, setRecommendations] = useState([]);
+    const [recommendationPlanCount, setRecommendationPlanCount] = useState(0);
+    const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+    const [recommendationsError, setRecommendationsError] = useState("");
+
+    async function loadDashboardData() {
         /**
-         * Sayfa ilk açıldığında backend health ve dashboard stats verilerini çekiyoruz.
-         * Bu yapı ileride DashboardPage için ana veri yükleme noktası olacak.
+         * Backend health ve dashboard stats verilerini çeker.
          */
 
-        async function loadDashboardData() {
-            try {
-                setLoading(true);
-                setErrorMessage("");
+        try {
+            setLoading(true);
+            setErrorMessage("");
 
-                const healthData = await getHealthStatus();
-                const statsData = await getStatsOverview();
+            const healthData = await getHealthStatus();
+            const statsData = await getStatsOverview();
 
-                setHealth(healthData);
-                setStats(statsData);
-            } catch (error) {
-                setErrorMessage(error.message || "Dashboard verileri alınamadı.");
-            } finally {
-                setLoading(false);
-            }
+            setHealth(healthData);
+            setStats(statsData);
+        } catch (error) {
+            setErrorMessage(error.message || "Dashboard verileri alınamadı.");
+        } finally {
+            setLoading(false);
         }
+    }
+
+    async function loadRecommendations() {
+        /**
+         * Kullanıcının önceki öğrenme planlarına göre önerilen yeni konuları getirir.
+         *
+         * Not:
+         * - Öneri sistemi hata verirse dashboard tamamen bozulmasın diye
+         *   hatayı sadece öneri alanında gösteriyoruz.
+         */
+
+        try {
+            setRecommendationsLoading(true);
+            setRecommendationsError("");
+
+            const recommendationData = await getLearningRecommendations(6);
+
+            setRecommendations(recommendationData.recommendations || []);
+            setRecommendationPlanCount(recommendationData.based_on_plan_count || 0);
+        } catch (error) {
+            setRecommendations([]);
+            setRecommendationPlanCount(0);
+            setRecommendationsError(
+                error.message || "Öğrenme önerileri alınamadı."
+            );
+        } finally {
+            setRecommendationsLoading(false);
+        }
+    }
+
+    useEffect(() => {
+        /**
+         * Sayfa ilk açıldığında dashboard verilerini ve öğrenme önerilerini yüklüyoruz.
+         */
 
         loadDashboardData();
+        loadRecommendations();
     }, []);
 
     if (loading) {
         return (
             <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-8">
-                <p className="text-slate-400">
-                    Dashboard verileri yükleniyor...
-                </p>
+                <p className="text-slate-400">Dashboard verileri yükleniyor...</p>
             </div>
         );
     }
@@ -53,9 +104,7 @@ function DashboardPage() {
                     Backend bağlantısı kurulamadı
                 </h2>
 
-                <p className="mt-3 text-sm text-red-200/80">
-                    {errorMessage}
-                </p>
+                <p className="mt-3 text-sm text-red-200/80">{errorMessage}</p>
 
                 <p className="mt-4 text-sm text-slate-400">
                     FastAPI backend’in çalıştığından emin ol:
@@ -77,11 +126,13 @@ function DashboardPage() {
                 </div>
 
                 <h2 className="mt-5 max-w-3xl text-4xl font-bold tracking-tight text-slate-50 md:text-5xl">
-                    Öğrenme planlarını, görev ilerlemesini ve quiz başarılarını tek panelden takip et.
+                    Öğrenme planlarını, görev ilerlemesini ve quiz başarılarını tek
+                    panelden takip et.
                 </h2>
 
                 <p className="mt-4 max-w-2xl text-slate-400">
-                    Bu React arayüzü, mevcut FastAPI backend’e bağlanarak plan, görev ve quiz istatistiklerini gösterecek şekilde hazırlanıyor.
+                    Bu React arayüzü, FastAPI backend’e bağlanarak plan, görev, quiz ve
+                    kişiselleştirilmiş öneri verilerini gösterir.
                 </p>
             </section>
 
@@ -165,7 +216,8 @@ function DashboardPage() {
                     <StatCard
                         title="En Son Quiz Skoru"
                         value={
-                            stats?.latest_quiz_score === null || stats?.latest_quiz_score === undefined
+                            stats?.latest_quiz_score === null ||
+                                stats?.latest_quiz_score === undefined
                                 ? "Yok"
                                 : `%${stats.latest_quiz_score}`
                         }
@@ -175,15 +227,92 @@ function DashboardPage() {
                 </div>
             </section>
 
-            {/* Resources hatırlatma alanı */}
-            <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
-                <h3 className="text-xl font-bold text-slate-100">
-                    Resources Alanı
-                </h3>
+            {/* Gemini destekli öğrenme önerileri */}
+            <section>
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div>
+                        <h3 className="text-2xl font-bold text-slate-100">
+                            Bunları da öğrenmek isteyebilirsiniz
+                        </h3>
 
-                <p className="mt-3 text-sm leading-6 text-slate-400">
-                    Şablondaki Resources bölümünü unutmadık. İlerleyen adımda backend’den gelen haftalık kaynakları ayrı bir Resources sayfasında veya plan detayında filtrelenebilir şekilde göstereceğiz.
-                </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                            Önceki {recommendationPlanCount} öğrenme planına göre Gemini
+                            tarafından önerildi.
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={loadRecommendations}
+                        disabled={recommendationsLoading}
+                        className="w-fit rounded-2xl border border-indigo-500/40 px-4 py-2 text-sm font-bold text-indigo-200 transition hover:bg-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {recommendationsLoading ? "Yükleniyor..." : "Önerileri Yenile"}
+                    </button>
+                </div>
+
+                {recommendationsError && (
+                    <div className="rounded-2xl border border-red-900/60 bg-red-950/40 p-4">
+                        <p className="text-sm text-red-200">{recommendationsError}</p>
+                    </div>
+                )}
+
+                {!recommendationsError && recommendationsLoading && (
+                    <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+                        <p className="text-sm text-slate-400">
+                            Öğrenme önerileri hazırlanıyor...
+                        </p>
+                    </div>
+                )}
+
+                {!recommendationsError &&
+                    !recommendationsLoading &&
+                    recommendations.length === 0 && (
+                        <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+                            <p className="text-sm text-slate-400">
+                                Henüz öneri oluşturmak için yeterli öğrenme geçmişi bulunamadı.
+                            </p>
+                        </div>
+                    )}
+
+                {!recommendationsError && recommendations.length > 0 && (
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        {recommendations.map((recommendation) => (
+                            <div
+                                key={`${recommendation.topic}-${recommendation.suggested_level}`}
+                                className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-slate-950/20"
+                            >
+                                <div className="flex flex-wrap gap-2">
+                                    <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-3 py-1 text-xs font-bold text-indigo-200">
+                                        {recommendation.suggested_level}
+                                    </span>
+
+                                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200">
+                                        {recommendation.suggested_learning_preference || "Dengeli"}
+                                    </span>
+                                </div>
+
+                                <h4 className="mt-4 text-xl font-bold text-slate-50">
+                                    {recommendation.topic}
+                                </h4>
+
+                                <p className="mt-3 text-sm leading-6 text-slate-400">
+                                    {recommendation.reason}
+                                </p>
+
+                                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+                                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                                        Önerilen hedef
+                                    </p>
+
+                                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                                        {recommendation.suggested_goal}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </section>
         </div>
     );

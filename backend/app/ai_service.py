@@ -2,6 +2,7 @@ import json
 import os
 import time
 import random
+import unicodedata
 from typing import Any, Dict
 
 from dotenv import load_dotenv
@@ -1265,6 +1266,462 @@ def generate_fallback_regenerated_week(
             }
         ]
     }
+
+
+def build_learning_recommendations_prompt(
+    plan_history: list[dict],
+    existing_topics: list[str],
+    limit: int = 6
+) -> str:
+    """
+    Kullanıcının önceki öğrenme planlarına göre yeni öğrenme önerileri üretmek için prompt oluşturur.
+    """
+
+    history_text = json.dumps(
+        plan_history,
+        ensure_ascii=False,
+        indent=2
+    )
+
+    existing_topics_text = ", ".join(existing_topics)
+
+    return f"""
+# 1. Context
+
+You are generating personalized next-learning recommendations for an AI-powered learning platform.
+
+The user has previously created learning plans. Each plan includes a topic, level, goal, weekly study hours, duration, and learning preference.
+
+Your task is to analyze this learning history and suggest new topics the user may want to learn next.
+
+# 2. Role
+
+Act as an expert AI learning advisor, software engineering mentor, and curriculum designer.
+
+# 3. Constraints
+
+- Return only valid JSON.
+- Do not use Markdown.
+- Do not add explanations outside JSON.
+- The JSON must be parseable by Python's json.loads().
+- All text content must be written in Turkish.
+- Generate exactly {limit} recommendations if possible.
+- Do not recommend topics that already exist in the user's learning history.
+- Avoid duplicate recommendations.
+- Recommendations should be realistic next steps based on the user's previous topics, goals, and levels.
+- Prefer recommendations that are naturally related to the user's learning history.
+- If the history includes software topics, suggest software, AI, backend, frontend, data, DevOps, testing, architecture, and production-readiness related topics.
+- If the history includes gaming, language, design, sport, or other domains, suggest relevant next topics in those domains too.
+- Each recommendation must include a clear reason.
+- suggested_goal should be specific enough to be used directly when creating a new learning plan.
+- suggested_level should be one of: "Başlangıç", "Orta", "İleri".
+- suggested_learning_preference should be one of: "Dengeli", "Uygulama ağırlıklı", "Quiz ve tekrar ağırlıklı", "Video ağırlıklı".
+
+# 4. User Learning History
+
+Existing topics:
+{existing_topics_text}
+
+Plan history:
+{history_text}
+
+# 5. Task
+
+Generate personalized learning recommendations based on the user's previous learning plans.
+
+# 6. Output Control
+
+Return exactly this JSON structure:
+
+{{
+  "recommendations": [
+    {{
+      "topic": "Önerilen konu",
+      "reason": "Bu konunun neden önerildiğinin kısa açıklaması",
+      "suggested_level": "Orta",
+      "suggested_goal": "Bu konu için önerilen öğrenme hedefi",
+      "suggested_learning_preference": "Uygulama ağırlıklı"
+    }}
+  ]
+}}
+"""
+
+def normalize_recommendation_topic(value: str) -> str:
+    """
+    Topic karşılaştırması için normalize işlemi yapar.
+    """
+
+    return normalize_recommendation_text(value)
+
+
+def generate_fallback_learning_recommendations(
+    existing_topics: list[str],
+    limit: int = 6
+) -> Dict[str, Any]:
+    """
+    Gemini çalışmazsa kullanılacak basit öneri sistemi.
+
+    Bu fallback, mevcut topic geçmişine göre statik ama mantıklı öneriler döndürür.
+    """
+
+    existing_normalized = {
+        normalize_recommendation_topic(topic)
+        for topic in existing_topics
+    }
+
+    related_topics = {
+        "python": [
+            {
+                "topic": "FastAPI",
+                "reason": "Python bilginizi backend API geliştirme tarafına taşıyabilir.",
+                "suggested_level": "Orta",
+                "suggested_goal": "FastAPI ile REST API geliştirme, veri doğrulama, veritabanı bağlantısı ve endpoint tasarımını öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+            {
+                "topic": "Python Unit Testing",
+                "reason": "Production seviyesinde Python kodu yazmak için test yazma becerisi önemlidir.",
+                "suggested_level": "Orta",
+                "suggested_goal": "pytest ve unittest kullanarak test edilebilir Python kodu yazmayı öğrenmek.",
+                "suggested_learning_preference": "Quiz ve tekrar ağırlıklı",
+            },
+        ],
+        "react": [
+            {
+                "topic": "TypeScript",
+                "reason": "React projelerinde daha güvenli ve sürdürülebilir kod yazmak için TypeScript iyi bir sonraki adımdır.",
+                "suggested_level": "Orta",
+                "suggested_goal": "TypeScript ile tip güvenli React componentleri ve frontend uygulamaları geliştirmeyi öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+            {
+                "topic": "Next.js",
+                "reason": "React bilginizi production seviyesinde full-stack frontend geliştirmeye taşıyabilir.",
+                "suggested_level": "Orta",
+                "suggested_goal": "Next.js ile routing, SSR, API routes ve production frontend mimarisi öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+        ],
+        "docker": [
+            {
+                "topic": "Kubernetes",
+                "reason": "Docker bilgisini container orchestration seviyesine taşımak için uygun bir sonraki konudur.",
+                "suggested_level": "Orta",
+                "suggested_goal": "Kubernetes ile deployment, service, pod, configmap ve temel cluster yönetimini öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+            {
+                "topic": "CI/CD",
+                "reason": "Docker ve deployment süreçlerini otomasyonla birleştirmek için CI/CD önemli bir beceridir.",
+                "suggested_level": "Orta",
+                "suggested_goal": "GitHub Actions veya benzeri araçlarla otomatik test, build ve deployment pipeline oluşturmayı öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+        ],
+        "ai": [
+            {
+                "topic": "RAG Sistemleri",
+                "reason": "Yapay zekâ projelerini daha kullanışlı hale getirmek için doküman tabanlı cevaplama sistemleri önemli bir adımdır.",
+                "suggested_level": "Orta",
+                "suggested_goal": "Embedding, vector database, retrieval ve LLM cevap üretimi ile temel RAG sistemi geliştirmeyi öğrenmek.",
+                "suggested_learning_preference": "Uygulama ağırlıklı",
+            },
+            {
+                "topic": "Prompt Engineering",
+                "reason": "LLM tabanlı projelerde daha güvenilir çıktı almak için prompt tasarımı önemlidir.",
+                "suggested_level": "Orta",
+                "suggested_goal": "Context, role, constraints, task ve output format kullanarak etkili promptlar yazmayı öğrenmek.",
+                "suggested_learning_preference": "Quiz ve tekrar ağırlıklı",
+            },
+        ],
+    }
+
+    recommendations = []
+
+    for existing_topic in existing_normalized:
+        for key, candidates in related_topics.items():
+            if key in existing_topic:
+                for candidate in candidates:
+                    candidate_topic = normalize_recommendation_topic(candidate["topic"])
+
+                    if candidate_topic not in existing_normalized:
+                        recommendations.append(candidate)
+
+    generic_recommendations = [
+        {
+            "topic": "Git ve GitHub Workflow",
+            "reason": "Yazılım projelerinde branch, commit, merge ve pull request süreçlerini daha profesyonel yönetmek için önerilir.",
+            "suggested_level": "Orta",
+            "suggested_goal": "Git branch yönetimi, merge conflict çözümü, pull request akışı ve temiz commit alışkanlıklarını öğrenmek.",
+            "suggested_learning_preference": "Uygulama ağırlıklı",
+        },
+        {
+            "topic": "SQL ve Veritabanı Tasarımı",
+            "reason": "Backend ve full-stack projelerde güçlü veritabanı bilgisi önemli bir temel beceridir.",
+            "suggested_level": "Orta",
+            "suggested_goal": "SQL sorguları, tablo ilişkileri, index mantığı ve temel veritabanı tasarımını öğrenmek.",
+            "suggested_learning_preference": "Quiz ve tekrar ağırlıklı",
+        },
+        {
+            "topic": "Software Architecture Basics",
+            "reason": "Projeleri daha sürdürülebilir ve ölçeklenebilir tasarlamak için mimari bakış açısı kazandırır.",
+            "suggested_level": "Orta",
+            "suggested_goal": "Katmanlı mimari, servis yapısı, modüler tasarım ve clean code prensiplerini öğrenmek.",
+            "suggested_learning_preference": "Uygulama ağırlıklı",
+        },
+    ]
+
+    for candidate in generic_recommendations:
+        candidate_topic = normalize_recommendation_topic(candidate["topic"])
+
+        if candidate_topic not in existing_normalized:
+            recommendations.append(candidate)
+
+    return {
+        "recommendations": recommendations[:limit]
+    }
+
+
+def normalize_recommendation_text(value: str) -> str:
+    """
+    Öneri sistemi için metinleri karşılaştırılabilir hale getirir.
+
+    Özellikle:
+    - "İleri" -> "ileri"
+    - "Başlangıç" -> "baslangic"
+    - "Uygulama Ağırlıklı" -> "uygulama agirlikli"
+    """
+
+    text = str(value or "").strip().casefold()
+
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+
+    replacements = {
+        "ı": "i",
+        "ş": "s",
+        "ğ": "g",
+        "ü": "u",
+        "ö": "o",
+        "ç": "c",
+    }
+
+    for old_char, new_char in replacements.items():
+        text = text.replace(old_char, new_char)
+
+    return text
+
+
+def normalize_suggested_level(value: str) -> str:
+    """
+    Gemini'den gelen seviye değerini frontend'deki standart değerlere çevirir.
+    """
+
+    normalized = normalize_recommendation_text(value)
+
+    if "bas" in normalized or "beginner" in normalized:
+        return "Başlangıç"
+
+    if "ileri" in normalized or "advanced" in normalized:
+        return "İleri"
+
+    return "Orta"
+
+
+def normalize_suggested_learning_preference(value: str) -> str:
+    """
+    Gemini'den gelen öğrenme tercihini uygulamadaki standart değerlere çevirir.
+    """
+
+    normalized = normalize_recommendation_text(value)
+
+    if "video" in normalized:
+        return "Video ağırlıklı"
+
+    if "quiz" in normalized or "tekrar" in normalized:
+        return "Quiz ve tekrar ağırlıklı"
+
+    if "uygulama" in normalized or "proje" in normalized or "practical" in normalized:
+        return "Uygulama ağırlıklı"
+
+    return "Dengeli"
+
+
+
+def normalize_learning_recommendations(
+    recommendation_data: Dict[str, Any],
+    existing_topics: list[str],
+    limit: int = 6
+) -> Dict[str, Any]:
+    """
+    Gemini'den gelen öneri çıktısını güvenli hale getirir.
+    """
+
+    existing_normalized = {
+        normalize_recommendation_topic(topic)
+        for topic in existing_topics
+    }
+
+    if not isinstance(recommendation_data, dict):
+        return generate_fallback_learning_recommendations(
+            existing_topics=existing_topics,
+            limit=limit
+        )
+
+    raw_recommendations = recommendation_data.get("recommendations", [])
+
+    if not isinstance(raw_recommendations, list):
+        return generate_fallback_learning_recommendations(
+            existing_topics=existing_topics,
+            limit=limit
+        )
+
+    normalized_recommendations = []
+    used_topics = set()
+
+    allowed_levels = {"Başlangıç", "Orta", "İleri"}
+    allowed_preferences = {
+        "Dengeli",
+        "Uygulama ağırlıklı",
+        "Quiz ve tekrar ağırlıklı",
+        "Video ağırlıklı",
+    }
+
+    for item in raw_recommendations:
+        if not isinstance(item, dict):
+            continue
+
+        topic = str(item.get("topic") or "").strip()
+
+        if not topic:
+            continue
+
+        normalized_topic = normalize_recommendation_topic(topic)
+
+        if normalized_topic in existing_normalized:
+            continue
+
+        if normalized_topic in used_topics:
+            continue
+
+        suggested_level = normalize_suggested_level(
+            item.get("suggested_level")
+        )
+
+        suggested_learning_preference = normalize_suggested_learning_preference(
+            item.get("suggested_learning_preference")
+        )
+
+        normalized_recommendations.append({
+            "topic": topic,
+            "reason": (
+                item.get("reason")
+                or "Bu konu, önceki öğrenme geçmişinize göre uygun bir sonraki adım olabilir."
+            ),
+            "suggested_level": suggested_level,
+            "suggested_goal": (
+                item.get("suggested_goal")
+                or f"{topic} konusunda temel ve uygulamalı beceriler kazanmak."
+            ),
+            "suggested_learning_preference": suggested_learning_preference,
+        })
+
+        used_topics.add(normalized_topic)
+
+        if len(normalized_recommendations) >= limit:
+            break
+
+    if len(normalized_recommendations) < limit:
+        fallback_data = generate_fallback_learning_recommendations(
+            existing_topics=existing_topics,
+            limit=limit
+        )
+
+        for fallback_item in fallback_data.get("recommendations", []):
+            if len(normalized_recommendations) >= limit:
+                break
+
+            fallback_topic = normalize_recommendation_topic(fallback_item["topic"])
+
+            if fallback_topic in existing_normalized or fallback_topic in used_topics:
+                continue
+
+            normalized_recommendations.append(fallback_item)
+            used_topics.add(fallback_topic)
+
+    return {
+        "recommendations": normalized_recommendations[:limit]
+    }
+
+
+
+
+def generate_learning_recommendations_with_gemini(
+    plan_history: list[dict],
+    limit: int = 6
+) -> Dict[str, Any]:
+    """
+    Kullanıcının önceki öğrenme planlarına göre Gemini ile yeni öğrenme önerileri üretir.
+
+    Kullanıcı sistemi henüz olmadığı için plan_history şu anda veritabanındaki mevcut planlardan oluşur.
+    """
+
+    existing_topics = [
+        plan.get("topic")
+        for plan in plan_history
+        if plan.get("topic")
+    ]
+
+    if not plan_history:
+        return generate_fallback_learning_recommendations(
+            existing_topics=[],
+            limit=limit
+        )
+
+    if client is None:
+        return generate_fallback_learning_recommendations(
+            existing_topics=existing_topics,
+            limit=limit
+        )
+
+    prompt = build_learning_recommendations_prompt(
+        plan_history=plan_history,
+        existing_topics=existing_topics,
+        limit=limit
+    )
+
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2
+                )
+            )
+
+            parsed_recommendations = parse_gemini_json_response(response.text)
+
+            return normalize_learning_recommendations(
+                recommendation_data=parsed_recommendations,
+                existing_topics=existing_topics,
+                limit=limit
+            )
+
+        except Exception as error:
+            print(f"[Gemini Recommendation Error] Attempt {attempt}/{max_retries}: {error}")
+
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+                continue
+
+            return generate_fallback_learning_recommendations(
+                existing_topics=existing_topics,
+                limit=limit
+            )
 
 # ============================================================
 # WEEKLY QUIZ PROMPT BUILDER

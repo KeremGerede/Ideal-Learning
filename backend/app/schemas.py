@@ -148,3 +148,25 @@ class RegenerateWeekRequest(BaseModel):
     """
 
     user_instruction: Optional[str] = None
+
+    
+
+class LearningRecommendation(BaseModel):
+    """
+    Kullanıcının önceki öğrenme planlarına göre önerilen yeni konu.
+    """
+
+    topic: str
+    reason: str
+    suggested_level: str
+    suggested_goal: str
+    suggested_learning_preference: Optional[str] = None
+
+
+class LearningRecommendationsResponse(BaseModel):
+    """
+    Öneri endpointinin response modeli.
+    """
+
+    based_on_plan_count: int
+    recommendations: List[LearningRecommendation]
