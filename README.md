@@ -523,7 +523,7 @@ Plan oluşturulduktan sonra kullanıcı doğrudan plan detayına gidebilir.
 
 ---
 
-## `.gitignore` Önerisi
+## `.gitignore` 
 
 ```gitignore
 # Node / React
