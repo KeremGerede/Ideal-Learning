@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.ai_service import generate_learning_recommendations_with_gemini
+from app.auth import get_current_user
 from app.database import get_db
 
 
@@ -15,17 +16,18 @@ router = APIRouter(
 @router.get("/", response_model=schemas.LearningRecommendationsResponse)
 def get_learning_recommendations(
     limit: int = 6,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
-    Önceki öğrenme planlarına göre yeni öğrenme önerileri üretir.
-
-    Kullanıcı sistemi henüz olmadığı için mevcut MVP'de veritabanındaki tüm planlar
-    kullanıcının öğrenme geçmişi gibi değerlendirilir.
+    Kimliği doğrulanmış kullanıcının öğrenme planlarına göre
+    kişiselleştirilmiş yeni öğrenme önerileri üretir.
+    Her kullanıcı yalnızca kendi planlarına göre öneri alır.
     """
 
     plans = (
         db.query(models.LearningPlan)
+        .filter(models.LearningPlan.user_id == current_user.id)
         .order_by(models.LearningPlan.id.desc())
         .limit(10)
         .all()

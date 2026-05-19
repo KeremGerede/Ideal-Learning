@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app import models, schemas
 from app.ai_service import generate_weekly_quiz_with_gemini
+from app.auth import get_current_user
 
 
 router = APIRouter(
@@ -19,34 +20,34 @@ router = APIRouter(
 def generate_weekly_quiz(
     plan_id: int,
     week_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Belirli bir öğrenme planının belirli haftası için quiz üretir.
-
-    İlk versiyonda quiz veritabanına kaydedilmez.
-    Sadece Gemini'den alınır ve response olarak döndürülür.
+    Planın kimliği doğrulanmış kullanıcıya ait olması gerekir.
     """
 
+    # Ownership check: plan must belong to current user.
     plan = (
         db.query(models.LearningPlan)
         .options(
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.tasks)
+            joinedload(models.LearningPlan.weeks).joinedload(models.PlanWeek.tasks)
         )
-        .filter(models.LearningPlan.id == plan_id)
+        .filter(
+            models.LearningPlan.id == plan_id,
+            models.LearningPlan.user_id == current_user.id
+        )
         .first()
     )
 
     if not plan:
         raise HTTPException(status_code=404, detail="Plan bulunamadı.")
 
-    selected_week = None
-
-    for week in plan.weeks:
-        if week.id == week_id:
-            selected_week = week
-            break
+    selected_week = next(
+        (week for week in plan.weeks if week.id == week_id),
+        None
+    )
 
     if not selected_week:
         raise HTTPException(status_code=404, detail="Hafta bulunamadı.")

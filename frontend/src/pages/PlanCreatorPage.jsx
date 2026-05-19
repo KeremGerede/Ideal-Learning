@@ -67,7 +67,10 @@ function PlanCreatorPage({ onViewCreatedPlan }) {
 
             setCreatedPlan(plan);
         } catch (error) {
-            setErrorMessage(error.message || "Plan oluşturulurken hata oluştu.");
+            // error.message is the already-parsed detail string from apiClient.js
+            setErrorMessage(
+                error.message || "Plan oluşturulurken bir hata oluştu. Lütfen tekrar deneyin."
+            );
         } finally {
             setIsSubmitting(false);
         }

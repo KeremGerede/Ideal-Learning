@@ -1,9 +1,11 @@
 import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app import models, schemas
+from app.auth import get_current_user
 
 
 router = APIRouter(
@@ -12,27 +14,30 @@ router = APIRouter(
 )
 
 
+def _verify_plan_ownership(plan_id: int, current_user: models.User, db: Session):
+    """Raises 404 if the plan doesn't exist or doesn't belong to current_user."""
+    plan = (
+        db.query(models.LearningPlan)
+        .filter(
+            models.LearningPlan.id == plan_id,
+            models.LearningPlan.user_id == current_user.id
+        )
+        .first()
+    )
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
+    return plan
+
+
 @router.post("/", response_model=schemas.QuizResultResponse)
 def save_quiz_result(
     request: schemas.QuizResultCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Kullanıcının tamamladığı quiz sonucunu veritabanına kaydeder.
+    """Tamamlanan quiz sonucunu veritabanına kaydeder."""
 
-    Not:
-    - İlk versiyonda soru cevap detaylarını değil, sadece özet sonucu kaydediyoruz.
-    - score_percentage backend tarafında hesaplanır.
-    """
-
-    plan = (
-        db.query(models.LearningPlan)
-        .filter(models.LearningPlan.id == request.plan_id)
-        .first()
-    )
-
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
+    _verify_plan_ownership(request.plan_id, current_user, db)
 
     week = (
         db.query(models.PlanWeek)
@@ -47,16 +52,10 @@ def save_quiz_result(
         raise HTTPException(status_code=404, detail="Hafta bulunamadı.")
 
     if request.total_questions <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Toplam soru sayısı 0'dan büyük olmalıdır."
-        )
+        raise HTTPException(status_code=400, detail="Toplam soru sayısı 0'dan büyük olmalıdır.")
 
     if request.correct_count < 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Doğru cevap sayısı negatif olamaz."
-        )
+        raise HTTPException(status_code=400, detail="Doğru cevap sayısı negatif olamaz.")
 
     if request.correct_count > request.total_questions:
         raise HTTPException(
@@ -65,12 +64,9 @@ def save_quiz_result(
         )
 
     score_percentage = round(
-        (request.correct_count / request.total_questions) * 100,
-        2
+        (request.correct_count / request.total_questions) * 100, 2
     )
 
-    # Eğer detay JSON geldiyse geçerli JSON mu kontrol ediyoruz.
-    # Bozuk JSON verisi DB'ye kaydedilmesin diye burada validate ediyoruz.
     if request.details_json:
         try:
             json.loads(request.details_json)
@@ -87,8 +83,6 @@ def save_quiz_result(
         correct_count=request.correct_count,
         total_questions=request.total_questions,
         score_percentage=score_percentage,
-
-        # Quiz soru/cevap detaylarını JSON string olarak kaydediyoruz.
         details_json=request.details_json
     )
 
@@ -98,18 +92,23 @@ def save_quiz_result(
 
     return quiz_result
 
-@router.get("/", response_model=list[schemas.QuizResultResponse])
-def get_all_quiz_results(db: Session = Depends(get_db)):
-    """
-    Sistemde kayıtlı tüm quiz sonuçlarını listeler.
 
-    Not:
-    - Şu an authentication olmadığı için tüm quiz sonuçları döndürülür.
-    - İleride kullanıcı sistemi eklenirse sadece aktif kullanıcının sonuçları döndürülecek.
-    """
+@router.get("/", response_model=list[schemas.QuizResultResponse])
+def get_all_quiz_results(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Kimliği doğrulanmış kullanıcıya ait tüm quiz sonuçlarını listeler."""
+
+    user_plan_ids = (
+        db.query(models.LearningPlan.id)
+        .filter(models.LearningPlan.user_id == current_user.id)
+        .subquery()
+    )
 
     results = (
         db.query(models.QuizResult)
+        .filter(models.QuizResult.plan_id.in_(user_plan_ids))
         .order_by(models.QuizResult.created_at.desc())
         .all()
     )
@@ -120,11 +119,12 @@ def get_all_quiz_results(db: Session = Depends(get_db)):
 @router.get("/plan/{plan_id}", response_model=list[schemas.QuizResultResponse])
 def get_quiz_results_by_plan(
     plan_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Belirli bir plana ait tüm quiz sonuçlarını listeler.
-    """
+    """Belirli bir plana ait tüm quiz sonuçlarını listeler."""
+
+    _verify_plan_ownership(plan_id, current_user, db)
 
     results = (
         db.query(models.QuizResult)
@@ -139,15 +139,23 @@ def get_quiz_results_by_plan(
 @router.get("/week/{week_id}", response_model=list[schemas.QuizResultResponse])
 def get_quiz_results_by_week(
     week_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Belirli bir haftaya ait quiz sonuçlarını listeler.
-    """
+    """Belirli bir haftaya ait quiz sonuçlarını listeler."""
+
+    user_plan_ids = (
+        db.query(models.LearningPlan.id)
+        .filter(models.LearningPlan.user_id == current_user.id)
+        .subquery()
+    )
 
     results = (
         db.query(models.QuizResult)
-        .filter(models.QuizResult.week_id == week_id)
+        .filter(
+            models.QuizResult.week_id == week_id,
+            models.QuizResult.plan_id.in_(user_plan_ids)
+        )
         .order_by(models.QuizResult.created_at.desc())
         .all()
     )

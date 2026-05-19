@@ -10,6 +10,12 @@ from google import genai
 from google.genai import types
 
 from app.youtube_service import enrich_plan_with_youtube_resources
+from app.safety import detect_gemini_safety_refusal
+
+
+class GeminiSafetyRefusalError(Exception):
+    """Raised when Gemini refuses a request due to safety/policy concerns."""
+    pass
 
 
 # ============================================================
@@ -355,6 +361,13 @@ def generate_learning_plan_with_gemini(
                 )
             )
 
+            # If Gemini responded with a safety refusal instead of JSON,
+            # raise immediately — do NOT fall back to a generic plan.
+            if detect_gemini_safety_refusal(response.text):
+                raise GeminiSafetyRefusalError(
+                    "Gemini güvenlik politikaları bu konu için içerik üretmeyi reddetti."
+                )
+
             parsed_plan = parse_gemini_json_response(response.text)
 
             return finalize_learning_plan(
@@ -366,6 +379,10 @@ def generate_learning_plan_with_gemini(
                 duration_weeks=duration_weeks,
                 learning_preference=learning_preference
             )
+
+        except GeminiSafetyRefusalError:
+            # Re-raise safety refusals — they must not be swallowed by the fallback.
+            raise
 
         except Exception as e:
             error_message = str(e)

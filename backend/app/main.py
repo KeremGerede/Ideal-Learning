@@ -3,13 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.routes import plans, tasks, quiz, stats, quiz_results, recommendations
+from app.routes import auth
 from app import models
 
 
 # ============================================================
 # DATABASE INIT
 # ============================================================
-# SQLAlchemy modellerine göre tabloları oluşturur.
+# Creates all tables that don't exist yet.
+# Adding new models (User) and columns (user_id FK) will be
+# reflected here on first startup after deleting learning.db.
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,7 +24,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="AI Personal Learning Platform API",
     description="Yapay zekâ destekli kişisel öğrenme planlama platformu",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 
@@ -30,11 +33,11 @@ app = FastAPI(
 # ============================================================
 
 allowed_origins = [
-    "http://localhost:3000",   # React CRA
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://localhost:5173",   # React Vite
+    "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://localhost:8501",   # Streamlit
+    "http://localhost:8501",
     "http://127.0.0.1:8501",
 ]
 
@@ -47,18 +50,13 @@ app.add_middleware(
 )
 
 
-
 # ============================================================
 # ROOT ENDPOINT
 # ============================================================
 
 @app.get("/")
 def root():
-    return {
-        "message": "AI Personal Learning Platform API is running"
-    }
-
-
+    return {"message": "AI Personal Learning Platform API is running"}
 
 
 # ============================================================
@@ -67,13 +65,6 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """
-    API sağlık kontrol endpointi.
-
-    Frontend veya geliştirme ortamı, backend'in çalışıp çalışmadığını
-    bu endpoint üzerinden kontrol edebilir.
-    """
-
     return {
         "status": "ok",
         "database": "connected",
@@ -81,12 +72,11 @@ def health_check():
     }
 
 
-
-
 # ============================================================
 # ROUTERS
 # ============================================================
 
+app.include_router(auth.router)
 app.include_router(plans.router)
 app.include_router(tasks.router)
 app.include_router(quiz.router)

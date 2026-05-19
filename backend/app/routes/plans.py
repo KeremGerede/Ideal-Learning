@@ -3,8 +3,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app import models, schemas
-from app.ai_service import generate_learning_plan_with_gemini, generate_regenerated_week_with_gemini
-
+from app.ai_service import (
+    generate_learning_plan_with_gemini,
+    generate_regenerated_week_with_gemini,
+    GeminiSafetyRefusalError,
+)
+from app.auth import get_current_user
+from app.safety import is_harmful_learning_request
 
 
 router = APIRouter(
@@ -13,55 +18,29 @@ router = APIRouter(
 )
 
 
-
 def sort_plan_response(plan: models.LearningPlan):
-    """
-    API response dönmeden önce plan içindeki haftaları, görevleri ve kaynakları sıralar.
-
-    Amaç:
-    - Haftalar her zaman week_number sırasıyla gelsin.
-    - Görevler her zaman id sırasıyla gelsin.
-    - Kaynaklar her zaman id sırasıyla gelsin.
-    - Streamlit ve React tarafında sıralama problemi yaşanmasın.
-    """
+    """Sort weeks, tasks, and resources before returning to the client."""
 
     if not plan:
         return plan
 
-    plan.weeks = sorted(
-        plan.weeks,
-        key=lambda week: week.week_number or 0
-    )
+    plan.weeks = sorted(plan.weeks, key=lambda week: week.week_number or 0)
 
     for week in plan.weeks:
-        week.tasks = sorted(
-            week.tasks,
-            key=lambda task: task.id or 0
-        )
-
-        week.resources = sorted(
-            week.resources,
-            key=lambda resource: resource.id or 0
-        )
+        week.tasks = sorted(week.tasks, key=lambda task: task.id or 0)
+        week.resources = sorted(week.resources, key=lambda resource: resource.id or 0)
 
     return plan
 
-# Bu fonksiyon, bir planı haftaları/görevleri/kaynakları ile birlikte getirir.
-def get_plan_with_details(
-    db: Session,
-    plan_id: int
-):
-    """
-    Bir öğrenme planını haftaları, görevleri ve kaynakları ile birlikte getirir.
-    """
+
+def get_plan_with_details(db: Session, plan_id: int):
+    """Fetch a plan with all its weeks, tasks, and resources."""
 
     plan = (
         db.query(models.LearningPlan)
         .options(
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.tasks),
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.resources)
+            joinedload(models.LearningPlan.weeks).joinedload(models.PlanWeek.tasks),
+            joinedload(models.LearningPlan.weeks).joinedload(models.PlanWeek.resources)
         )
         .filter(models.LearningPlan.id == plan_id)
         .first()
@@ -70,118 +49,68 @@ def get_plan_with_details(
     return sort_plan_response(plan)
 
 
-#Bu fonksiyon, AI’dan gelen normalize edilmiş planı veritabanına kaydeder
-def create_plan_from_ai_data(
-    db: Session,
-    ai_plan: dict,
-    fallback_request: schemas.GeneratePlanRequest
-):
+def require_plan_ownership(
+    plan_id: int,
+    current_user: models.User,
+    db: Session
+) -> models.LearningPlan:
     """
-    AI'dan gelen öğrenme planı verisini veritabanına kaydeder.
-
-    Kaydedilen yapılar:
-    - LearningPlan
-    - PlanWeek
-    - PlanTask
-    - PlanResource
+    Returns the plan if it belongs to current_user.
+    Raises 404 (not 403) to avoid leaking whether a plan exists.
     """
-
-    weeks = ai_plan.get("weeks", [])
-
-    if not weeks:
-        raise HTTPException(
-            status_code=500,
-            detail="AI geçerli bir haftalık plan döndürmedi."
+    plan = (
+        db.query(models.LearningPlan)
+        .filter(
+            models.LearningPlan.id == plan_id,
+            models.LearningPlan.user_id == current_user.id
         )
-
-    plan = models.LearningPlan(
-        topic=ai_plan.get("topic", fallback_request.topic),
-        level=ai_plan.get("level", fallback_request.level),
-        goal=ai_plan.get("goal", fallback_request.goal),
-        weekly_hours=ai_plan.get(
-            "weekly_hours",
-            fallback_request.weekly_hours
-        ),
-        duration_weeks=ai_plan.get(
-            "duration_weeks",
-            fallback_request.duration_weeks
-        ),
-        learning_preference=ai_plan.get(
-            "learning_preference",
-            fallback_request.learning_preference
-        ),
-        summary=ai_plan.get("summary"),
-        final_outcome=ai_plan.get("final_outcome")
+        .first()
     )
 
-    db.add(plan)
-    db.flush()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
 
-    for week_data in weeks:
-        week = models.PlanWeek(
-            plan_id=plan.id,
-            week_number=week_data.get("week_number"),
-            title=week_data.get("title", "Hafta Başlığı"),
-            description=week_data.get("description"),
-            estimated_hours=week_data.get("estimated_hours"),
-            mini_project=week_data.get("mini_project")
-        )
-
-        db.add(week)
-        db.flush()
-
-        for task_data in week_data.get("tasks", []):
-            if isinstance(task_data, str):
-                task = models.PlanTask(
-                    week_id=week.id,
-                    task_text=task_data,
-                    is_completed=False
-                )
-
-            else:
-                task = models.PlanTask(
-                    week_id=week.id,
-                    task_text=task_data.get("task_text", "Görev açıklaması"),
-                    task_type=task_data.get("task_type"),
-                    estimated_minutes=task_data.get("estimated_minutes"),
-                    difficulty=task_data.get("difficulty"),
-                    is_completed=False
-                )
-
-            db.add(task)
-
-        for resource_data in week_data.get("resources", []):
-            resource = models.PlanResource(
-                week_id=week.id,
-                resource_title=resource_data.get("resource_title", "Kaynak"),
-                resource_type=resource_data.get("resource_type"),
-                resource_description=resource_data.get("resource_description"),
-                resource_url=resource_data.get("resource_url")
-            )
-
-            db.add(resource)
-
-    db.commit()
-    db.refresh(plan)
-
-    return get_plan_with_details(db, plan.id)
+    return plan
 
 
 @router.post("/generate", response_model=schemas.PlanResponse)
 def generate_learning_plan(
     request: schemas.GeneratePlanRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
-    Kullanıcıdan gelen bilgilere göre Gemini ile kişisel öğrenme planı üretir.
-    Üretilen plan, haftalar, görevler ve kaynaklar SQLite veritabanına kaydedilir.
+    AI ile kişisel öğrenme planı oluşturur ve veritabanına kaydeder.
+
+    Akış:
+    1. Kullanıcı kimlik doğrulaması (JWT)
+    2. Zararlı içerik güvenlik kontrolü (deterministic)
+    3. Gemini ile plan üretimi
+    4. Gemini güvenlik reddi kontrolü
+    5. Planı current_user'a bağlı olarak veritabanına kaydetme
     """
 
     # ============================================================
-    # 1. GEMINI İLE PLAN ÜRETME
+    # 1. HARMFUL CONTENT PRE-CHECK
     # ============================================================
-    # Kullanıcıdan gelen form bilgilerini Gemini'ye gönderiyoruz.
-    # Gemini'den beklenen çıktı JSON formatında haftalık öğrenme planıdır.
+    is_harmful, reason = is_harmful_learning_request(
+        topic=request.topic,
+        goal=request.goal,
+        learning_preference=request.learning_preference
+    )
+
+    if is_harmful:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Bu konu güvenli öğrenme politikaları nedeniyle öğrenme planına "
+                "dönüştürülemez. Lütfen farklı bir konu veya hedef belirtin."
+            )
+        )
+
+    # ============================================================
+    # 2. GEMINI İLE PLAN ÜRETME
+    # ============================================================
     try:
         ai_plan = generate_learning_plan_with_gemini(
             topic=request.topic,
@@ -192,6 +121,15 @@ def generate_learning_plan(
             learning_preference=request.learning_preference
         )
 
+    except GeminiSafetyRefusalError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Bu konu güvenli öğrenme politikaları nedeniyle öğrenme planına "
+                "dönüştürülemez. Lütfen farklı bir konu veya hedef belirtin."
+            )
+        )
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -199,9 +137,8 @@ def generate_learning_plan(
         )
 
     # ============================================================
-    # 2. AI ÇIKTISINI KONTROL ETME
+    # 3. AI ÇIKTISINI KONTROL ETME
     # ============================================================
-    # Gemini'den weeks alanı gelmezse planı kaydetmek mantıklı değil.
     weeks = ai_plan.get("weeks", [])
 
     if not weeks:
@@ -211,22 +148,16 @@ def generate_learning_plan(
         )
 
     # ============================================================
-    # 3. ANA PLANI VERİTABANINA KAYDETME
+    # 4. PLANI VERİTABANINA KAYDETME (current_user'a bağlı)
     # ============================================================
-    # AI'dan gelen temel plan bilgilerini kaydediyoruz.
-    # Eğer AI bazı alanları döndürmezse request içindeki orijinal değerleri kullanıyoruz.
     plan = models.LearningPlan(
+        user_id=current_user.id,
         topic=ai_plan.get("topic", request.topic),
         level=ai_plan.get("level", request.level),
         goal=ai_plan.get("goal", request.goal),
         weekly_hours=ai_plan.get("weekly_hours", request.weekly_hours),
         duration_weeks=ai_plan.get("duration_weeks", request.duration_weeks),
-        learning_preference=ai_plan.get(
-            "learning_preference",
-            request.learning_preference
-        ),
-
-        # Yeni alanlar:
+        learning_preference=ai_plan.get("learning_preference", request.learning_preference),
         summary=ai_plan.get("summary"),
         final_outcome=ai_plan.get("final_outcome")
     )
@@ -235,19 +166,12 @@ def generate_learning_plan(
         db.add(plan)
         db.flush()
 
-        # ============================================================
-        # 4. HAFTALARI, GÖREVLERİ VE KAYNAKLARI KAYDETME
-        # ============================================================
-        # Artık placeholder plan üretmiyoruz.
-        # Doğrudan Gemini'den gelen weeks listesi üzerinden dönüyoruz.
         for week_data in weeks:
             week = models.PlanWeek(
                 plan_id=plan.id,
                 week_number=week_data.get("week_number"),
                 title=week_data.get("title", "Hafta Başlığı"),
                 description=week_data.get("description"),
-
-                # Yeni alanlar:
                 estimated_hours=week_data.get("estimated_hours"),
                 mini_project=week_data.get("mini_project")
             )
@@ -255,18 +179,6 @@ def generate_learning_plan(
             db.add(week)
             db.flush()
 
-            # ========================================================
-            # 4.1. HAFTAYA AİT GÖREVLERİ KAYDETME
-            # ========================================================
-            # Yeni beklenen format:
-            # {
-            #   "task_text": "...",
-            #   "task_type": "Teori",
-            #   "estimated_minutes": 60,
-            #   "difficulty": "Kolay"
-            # }
-            #
-            # Güvenlik için eski string format gelirse onu da destekliyoruz.
             for task_data in week_data.get("tasks", []):
                 if isinstance(task_data, str):
                     task = models.PlanTask(
@@ -274,7 +186,6 @@ def generate_learning_plan(
                         task_text=task_data,
                         is_completed=False
                     )
-
                 else:
                     task = models.PlanTask(
                         week_id=week.id,
@@ -287,9 +198,6 @@ def generate_learning_plan(
 
                 db.add(task)
 
-            # ========================================================
-            # 4.2. HAFTAYA AİT KAYNAKLARI KAYDETME
-            # ========================================================
             for resource_data in week_data.get("resources", []):
                 resource = models.PlanResource(
                     week_id=week.id,
@@ -313,36 +221,23 @@ def generate_learning_plan(
     # ============================================================
     # 5. OLUŞTURULAN PLANI DETAYLI ŞEKİLDE GERİ DÖNDÜRME
     # ============================================================
-    # Planı haftaları, görevleri ve kaynaklarıyla birlikte tekrar çekiyoruz.
-    created_plan = (
-        db.query(models.LearningPlan)
-        .options(
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.tasks),
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.resources)
-        )
-        .filter(models.LearningPlan.id == plan.id)
-        .first()
-    )
-
-    return sort_plan_response(created_plan)
+    return get_plan_with_details(db, plan.id)
 
 
 @router.get("/", response_model=list[schemas.PlanResponse])
-def get_all_plans(db: Session = Depends(get_db)):
-    """
-    Veritabanındaki tüm öğrenme planlarını listeler.
-    """
+def get_all_plans(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Kimliği doğrulanmış kullanıcının tüm öğrenme planlarını listeler."""
 
     plans = (
         db.query(models.LearningPlan)
         .options(
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.tasks),
-            joinedload(models.LearningPlan.weeks)
-            .joinedload(models.PlanWeek.resources)
+            joinedload(models.LearningPlan.weeks).joinedload(models.PlanWeek.tasks),
+            joinedload(models.LearningPlan.weeks).joinedload(models.PlanWeek.resources)
         )
+        .filter(models.LearningPlan.user_id == current_user.id)
         .order_by(models.LearningPlan.created_at.desc())
         .all()
     )
@@ -353,37 +248,24 @@ def get_all_plans(db: Session = Depends(get_db)):
 @router.get("/{plan_id}", response_model=schemas.PlanResponse)
 def get_plan_by_id(
     plan_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Belirli bir öğrenme planını ID'ye göre detaylı şekilde getirir.
-    """
+    """Belirli bir öğrenme planını detaylı şekilde getirir. Kullanıcı sahipliği kontrol edilir."""
 
-    plan = get_plan_with_details(db, plan_id)
-
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
-
-    return plan
+    require_plan_ownership(plan_id, current_user, db)
+    return get_plan_with_details(db, plan_id)
 
 
 @router.get("/{plan_id}/progress", response_model=schemas.ProgressResponse)
 def get_plan_progress(
     plan_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Belirli bir öğrenme planındaki görevlerin tamamlanma yüzdesini hesaplar.
-    """
+    """Bir öğrenme planındaki görevlerin tamamlanma yüzdesini hesaplar."""
 
-    plan = (
-        db.query(models.LearningPlan)
-        .filter(models.LearningPlan.id == plan_id)
-        .first()
-    )
-
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
+    require_plan_ownership(plan_id, current_user, db)
 
     tasks = (
         db.query(models.PlanTask)
@@ -393,12 +275,11 @@ def get_plan_progress(
     )
 
     total_tasks = len(tasks)
-    completed_tasks = len([task for task in tasks if task.is_completed])
+    completed_tasks = len([t for t in tasks if t.is_completed])
 
-    if total_tasks == 0:
-        progress_percentage = 0
-    else:
-        progress_percentage = round((completed_tasks / total_tasks) * 100, 2)
+    progress_percentage = (
+        round((completed_tasks / total_tasks) * 100, 2) if total_tasks > 0 else 0
+    )
 
     return {
         "plan_id": plan_id,
@@ -411,24 +292,13 @@ def get_plan_progress(
 @router.delete("/{plan_id}")
 def delete_plan(
     plan_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    """
-    Belirli bir öğrenme planını siler.
+    """Belirli bir öğrenme planını ve ilgili quiz sonuçlarını siler."""
 
-    Plana bağlı quiz sonuçları da silinir.
-    """
+    plan = require_plan_ownership(plan_id, current_user, db)
 
-    plan = (
-        db.query(models.LearningPlan)
-        .filter(models.LearningPlan.id == plan_id)
-        .first()
-    )
-
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plan bulunamadı.")
-
-    # Plan silinmeden önce bu plana ait quiz sonuçlarını temizliyoruz.
     db.query(models.QuizResult).filter(
         models.QuizResult.plan_id == plan_id
     ).delete(synchronize_session=False)
@@ -436,10 +306,7 @@ def delete_plan(
     db.delete(plan)
     db.commit()
 
-    return {
-        "message": "Plan başarıyla silindi.",
-        "deleted_plan_id": plan_id
-    }
+    return {"message": "Plan başarıyla silindi.", "deleted_plan_id": plan_id}
 
 
 @router.patch("/{plan_id}/weeks/{week_id}/regenerate", response_model=schemas.PlanResponse)
@@ -447,30 +314,15 @@ def regenerate_plan_week(
     plan_id: int,
     week_id: int,
     request: schemas.RegenerateWeekRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Seçili haftayı AI ile yeniden üretir.
-
-    Bu endpoint:
-    - Sadece seçilen haftayı değiştirir.
-    - Planın diğer haftalarına dokunmaz.
-    - Eski task/resource kayıtlarını siler.
-    - Yeni task/resource kayıtlarını ekler.
-    - İlgili haftaya ait eski quiz sonuçlarını temizler.
+    Sadece seçilen hafta değiştirilir; diğer haftalar korunur.
     """
 
-    plan = (
-        db.query(models.LearningPlan)
-        .filter(models.LearningPlan.id == plan_id)
-        .first()
-    )
-
-    if not plan:
-        raise HTTPException(
-            status_code=404,
-            detail="Plan bulunamadı."
-        )
+    plan = require_plan_ownership(plan_id, current_user, db)
 
     week = (
         db.query(models.PlanWeek)
@@ -482,10 +334,7 @@ def regenerate_plan_week(
     )
 
     if not week:
-        raise HTTPException(
-            status_code=404,
-            detail="Hafta bulunamadı."
-        )
+        raise HTTPException(status_code=404, detail="Hafta bulunamadı.")
 
     current_tasks = [
         {
@@ -559,7 +408,6 @@ def regenerate_plan_week(
             difficulty=task_data["difficulty"],
             is_completed=False,
         )
-
         db.add(new_task)
 
     for resource_data in regenerated_week.get("resources", []):
@@ -570,14 +418,8 @@ def regenerate_plan_week(
             resource_description=resource_data["resource_description"],
             resource_url=resource_data.get("resource_url"),
         )
-
         db.add(new_resource)
 
     db.commit()
 
-    updated_plan = get_plan_with_details(
-        db=db,
-        plan_id=plan_id
-    )
-
-    return updated_plan
+    return get_plan_with_details(db=db, plan_id=plan_id)

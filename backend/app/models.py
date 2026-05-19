@@ -6,10 +6,29 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    plans = relationship(
+        "LearningPlan",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+
+
 class LearningPlan(Base):
     __tablename__ = "learning_plans"
 
     id = Column(Integer, primary_key=True, index=True)
+
+    # Owner of this plan. nullable=True for safe migration of existing data.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
 
     topic = Column(String, nullable=False)
     level = Column(String, nullable=False)
@@ -18,16 +37,13 @@ class LearningPlan(Base):
     duration_weeks = Column(Integer, nullable=False)
     learning_preference = Column(String, nullable=True)
 
-    # AI tarafından oluşturulan planın kısa genel özeti.
     summary = Column(Text, nullable=True)
-
-    # Plan sonunda kullanıcının kazanacağı becerileri açıklar.
     final_outcome = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # LearningPlan -> PlanWeek ilişkisi.
-    # Bir öğrenme planının birden fazla haftası olabilir.
+    user = relationship("User", back_populates="plans")
+
     weeks = relationship(
         "PlanWeek",
         back_populates="plan",
@@ -45,21 +61,11 @@ class PlanWeek(Base):
     week_number = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-
-    # Bu hafta için önerilen tahmini çalışma süresi.
     estimated_hours = Column(Integer, nullable=True)
-
-    # Haftanın sonunda yapılabilecek mini uygulama/proje önerisi.
     mini_project = Column(Text, nullable=True)
 
-    # PlanWeek -> LearningPlan ilişkisi.
-    plan = relationship(
-        "LearningPlan",
-        back_populates="weeks"
-    )
+    plan = relationship("LearningPlan", back_populates="weeks")
 
-    # PlanWeek -> PlanTask ilişkisi.
-    # Bir haftanın birden fazla görevi olabilir.
     tasks = relationship(
         "PlanTask",
         back_populates="week",
@@ -67,8 +73,6 @@ class PlanWeek(Base):
         order_by="PlanTask.id"
     )
 
-    # PlanWeek -> PlanResource ilişkisi.
-    # Bir haftanın birden fazla kaynak önerisi olabilir.
     resources = relationship(
         "PlanResource",
         back_populates="week",
@@ -86,20 +90,11 @@ class PlanTask(Base):
     task_text = Column(Text, nullable=False)
     is_completed = Column(Boolean, default=False)
 
-    # Görevin türü. Örn: Teori, Uygulama, Proje, Tekrar, Araştırma.
     task_type = Column(String, nullable=True)
-
-    # Görev için önerilen tahmini süre.
     estimated_minutes = Column(Integer, nullable=True)
-
-    # Görevin zorluk seviyesi. Örn: Kolay, Orta, Zor.
     difficulty = Column(String, nullable=True)
 
-    # PlanTask -> PlanWeek ilişkisi.
-    week = relationship(
-        "PlanWeek",
-        back_populates="tasks"
-    )
+    week = relationship("PlanWeek", back_populates="tasks")
 
 
 class PlanResource(Base):
@@ -113,21 +108,15 @@ class PlanResource(Base):
     resource_description = Column(Text, nullable=True)
     resource_url = Column(Text, nullable=True)
 
-    # PlanResource -> PlanWeek ilişkisi.
-    week = relationship(
-        "PlanWeek",
-        back_populates="resources"
-    )
+    week = relationship("PlanWeek", back_populates="resources")
+
 
 class QuizResult(Base):
     __tablename__ = "quiz_results"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Hangi plana ait quiz sonucu olduğunu tutar.
     plan_id = Column(Integer, ForeignKey("learning_plans.id"), nullable=False)
-
-    # Hangi haftaya ait quiz sonucu olduğunu tutar.
     week_id = Column(Integer, ForeignKey("plan_weeks.id"), nullable=False)
 
     quiz_title = Column(String, nullable=False)
@@ -136,8 +125,6 @@ class QuizResult(Base):
     total_questions = Column(Integer, nullable=False)
     score_percentage = Column(Integer, nullable=False)
 
-    # Quizdeki soru, kullanıcının cevabı, doğru cevap ve açıklama detaylarını JSON string olarak saklar.
-    # MVP için ayrı quiz_questions / quiz_answers tabloları yerine sade bir JSON alanı kullanıyoruz.
     details_json = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

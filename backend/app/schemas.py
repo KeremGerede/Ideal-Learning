@@ -3,6 +3,40 @@ from typing import List, Optional
 from datetime import datetime
 
 
+# ================================================================
+# AUTH SCHEMAS
+# ================================================================
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ================================================================
+# PLAN SCHEMAS
+# ================================================================
+
 class GeneratePlanRequest(BaseModel):
     topic: str
     level: str
@@ -16,8 +50,6 @@ class TaskResponse(BaseModel):
     id: int
     task_text: str
     is_completed: bool
-
-    # Yeni alanlar:
     task_type: Optional[str] = None
     estimated_minutes: Optional[int] = None
     difficulty: Optional[str] = None
@@ -42,11 +74,8 @@ class WeekResponse(BaseModel):
     week_number: int
     title: str
     description: Optional[str] = None
-
-    # Yeni alanlar:
     estimated_hours: Optional[int] = None
     mini_project: Optional[str] = None
-
     tasks: List[TaskResponse] = []
     resources: List[ResourceResponse] = []
 
@@ -62,11 +91,8 @@ class PlanResponse(BaseModel):
     weekly_hours: int
     duration_weeks: int
     learning_preference: Optional[str] = None
-
-    # Yeni alanlar:
     summary: Optional[str] = None
     final_outcome: Optional[str] = None
-
     created_at: datetime
     weeks: List[WeekResponse] = []
 
@@ -80,6 +106,10 @@ class ProgressResponse(BaseModel):
     completed_tasks: int
     progress_percentage: float
 
+
+# ================================================================
+# QUIZ SCHEMAS
+# ================================================================
 
 class QuizQuestionResponse(BaseModel):
     question: str
@@ -95,16 +125,23 @@ class QuizResponse(BaseModel):
     questions: List[QuizQuestionResponse]
 
 
+# ================================================================
+# STATS SCHEMAS
+# ================================================================
+
 class StatsOverviewResponse(BaseModel):
     total_plans: int
     total_tasks: int
     completed_tasks: int
     overall_progress_percentage: float
-
-    # Quiz istatistikleri
     total_quizzes: int
     average_quiz_score: float
     latest_quiz_score: float | None = None
+
+
+# ================================================================
+# QUIZ RESULT SCHEMAS
+# ================================================================
 
 class QuizResultCreate(BaseModel):
     plan_id: int
@@ -112,8 +149,6 @@ class QuizResultCreate(BaseModel):
     quiz_title: str
     correct_count: int
     total_questions: int
-
-    # Quiz soru/cevap detayları JSON string olarak backend'e gönderilir.
     details_json: Optional[str] = None
 
 
@@ -125,37 +160,26 @@ class QuizResultResponse(BaseModel):
     correct_count: int
     total_questions: int
     score_percentage: float
-
-    # Kaydedilmiş quiz detayları.
     details_json: Optional[str] = None
-
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 
+# ================================================================
+# WEEK REGENERATION SCHEMA
+# ================================================================
+
 class RegenerateWeekRequest(BaseModel):
-    """
-    Seçili haftayı AI ile yeniden düzenlemek için kullanılan request modeli.
-
-    user_instruction:
-    Kullanıcının o hafta için özel isteğini tutar.
-    Örnek:
-    - "Bu haftayı daha uygulama ağırlıklı yap."
-    - "Kaynakları daha teknik hale getir."
-    - "Görevleri ileri seviyeye çek."
-    """
-
     user_instruction: Optional[str] = None
 
-    
+
+# ================================================================
+# RECOMMENDATIONS SCHEMAS
+# ================================================================
 
 class LearningRecommendation(BaseModel):
-    """
-    Kullanıcının önceki öğrenme planlarına göre önerilen yeni konu.
-    """
-
     topic: str
     reason: str
     suggested_level: str
@@ -164,9 +188,5 @@ class LearningRecommendation(BaseModel):
 
 
 class LearningRecommendationsResponse(BaseModel):
-    """
-    Öneri endpointinin response modeli.
-    """
-
     based_on_plan_count: int
     recommendations: List[LearningRecommendation]
