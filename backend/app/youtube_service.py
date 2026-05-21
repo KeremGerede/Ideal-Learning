@@ -369,7 +369,8 @@ def search_youtube_videos(
             if videos:
                 return videos
 
-        except Exception:
+        except Exception as e:
+            print(f"[YouTube Search Error] API request failed: {e}")
             continue
 
     return []
@@ -769,6 +770,40 @@ def get_youtube_resources(
                 })
 
                 break
+
+    # Eğer API'den video bulunamadıysa (örneğin API kota aşımı veya ağ hatası),
+    # kullanıcının videosuz kalmaması için doğrudan YouTube arama linklerini fallback olarak ekliyoruz.
+    if not selected_resources:
+        import urllib.parse
+        
+        candidates_focus = []
+        for focus in task_focuses:
+            if focus not in candidates_focus:
+                candidates_focus.append(focus)
+        for focus in fallback_focuses:
+            if len(candidates_focus) >= max_videos:
+                break
+            if focus not in candidates_focus:
+                candidates_focus.append(focus)
+                
+        for focus in candidates_focus[:max_videos]:
+            if focus.lower().startswith(topic.lower()):
+                query = focus
+            else:
+                query = f"{topic} {focus}"
+            encoded_query = urllib.parse.quote(query)
+            search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
+            
+            selected_resources.append({
+                "resource_title": f"YouTube Video: {focus}",
+                "resource_type": "YouTube Video",
+                "resource_description": (
+                    f"Desteklediği görev/konu: {focus}. "
+                    f"YouTube Data API kota sınırına ulaştığı için doğrudan video yüklenemedi. "
+                    f"Bu konudaki YouTube videolarını doğrudan aratmak için bu bağlantıyı açabilirsiniz."
+                ),
+                "resource_url": search_url,
+            })
 
     return selected_resources
 

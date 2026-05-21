@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 from google import genai
+# pyrefly: ignore [missing-import]
 from google.genai import types
 
 from app.youtube_service import enrich_plan_with_youtube_resources
@@ -33,6 +34,75 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # ============================================================
 # Gemini API istemcisi. API key yoksa fallback akışlarını kullanacağız.
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+
+# ============================================================
+# SAFETY CONFIG & HELPERS
+# ============================================================
+# Gemini güvenlik filtrelerini (Safety Settings) yapılandırıyoruz.
+# Eşik değerleri (threshold):
+# - BLOCK_LOW_AND_ABOVE: Düşük hassasiyetli/olasılıklı zararlar dahil engeller (En katı).
+# - BLOCK_MEDIUM_AND_ABOVE: Orta ve yüksek hassasiyetli/olasılıklı zararları engeller (Standart/Dengeli).
+# - BLOCK_ONLY_HIGH: Yalnızca yüksek olasılıklı zararları engeller.
+# - BLOCK_NONE: İlgili kategorideki filtrelemeyi kapatır.
+DEFAULT_SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold=types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold=types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold=types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold=types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+]
+
+
+def check_safety_refusal(response) -> None:
+    """Gemini cevabının güvenlik filtrelerine takılıp takılmadığını denetler."""
+    if not response:
+        return
+
+    # Aday cevapların (candidates) bitiş nedenini (finish_reason) kontrol ediyoruz
+    if response.candidates:
+        candidate = response.candidates[0]
+        finish_reason = getattr(candidate, 'finish_reason', None)
+        if finish_reason:
+            finish_reason_str = str(finish_reason).upper()
+            if "SAFETY" in finish_reason_str or "RECITATION" in finish_reason_str or "OTHER" in finish_reason_str:
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle içerik üretmeyi reddetti. Bitiş nedeni: {finish_reason}"
+                )
+
+    # Promptun kendisinin engellenip engellenmediğini kontrol ediyoruz
+    prompt_feedback = getattr(response, 'prompt_feedback', None)
+    if prompt_feedback:
+        block_reason = getattr(prompt_feedback, 'block_reason', None)
+        if block_reason:
+            raise GeminiSafetyRefusalError(
+                f"Gemini güvenlik politikaları nedeniyle girdiyi (prompt) engelledi. Engel nedeni: {block_reason}"
+            )
+
+
+def get_response_text_safely(response) -> str:
+    """Gemini cevabının metnini güvenli bir şekilde alır, filtre takılmalarını yakalar."""
+    check_safety_refusal(response)
+    try:
+        return response.text
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "safety" in err_msg or "block" in err_msg or "finish_reason" in err_msg:
+            raise GeminiSafetyRefusalError(
+                "Gemini güvenlik politikaları nedeniyle içerik üretilemedi."
+            ) from e
+        raise e
 
 
 # ============================================================
@@ -357,18 +427,21 @@ def generate_learning_plan_with_gemini(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.4
+                    temperature=0.4,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
                 )
             )
 
+            response_text = get_response_text_safely(response)
+
             # If Gemini responded with a safety refusal instead of JSON,
             # raise immediately — do NOT fall back to a generic plan.
-            if detect_gemini_safety_refusal(response.text):
+            if detect_gemini_safety_refusal(response_text):
                 raise GeminiSafetyRefusalError(
                     "Gemini güvenlik politikaları bu konu için içerik üretmeyi reddetti."
                 )
 
-            parsed_plan = parse_gemini_json_response(response.text)
+            parsed_plan = parse_gemini_json_response(response_text)
 
             return finalize_learning_plan(
                 ai_plan=parsed_plan,
@@ -386,6 +459,12 @@ def generate_learning_plan_with_gemini(
 
         except Exception as e:
             error_message = str(e)
+
+            # Eğer hata güvenlik filtreleri veya engelleme ile ilgiliyse, doğrudan fırlatıyoruz ve fallback üretmiyoruz.
+            if any(sig in error_message.lower() for sig in ["safety", "block", "harmful", "policy", "abuse", "finish_reason"]):
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle istek engellendi: {error_message}"
+                ) from e
 
             print(f"[Gemini Error] Attempt {attempt}/{max_retries}: {error_message}")
 
@@ -1054,11 +1133,13 @@ def generate_regenerated_week_with_gemini(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.4
+                    temperature=0.4,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
                 )
             )
 
-            parsed_week = parse_gemini_json_response(response.text)
+            response_text = get_response_text_safely(response)
+            parsed_week = parse_gemini_json_response(response_text)
 
             return normalize_regenerated_week(
                 week_data=parsed_week,
@@ -1067,7 +1148,16 @@ def generate_regenerated_week_with_gemini(
                 week_number=week_number
             )
 
+        except GeminiSafetyRefusalError:
+            # Güvenlik reddi durumunda doğrudan fırlatıyoruz, fallback üretilmemeli.
+            raise
         except Exception as error:
+            error_message = str(error)
+            if any(sig in error_message.lower() for sig in ["safety", "block", "harmful", "policy", "abuse", "finish_reason"]):
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle istek engellendi: {error_message}"
+                ) from error
+
             print(f"[Gemini Week Regenerate Error] Attempt {attempt}/{max_retries}: {error}")
 
             if attempt < max_retries:
@@ -1716,11 +1806,13 @@ def generate_learning_recommendations_with_gemini(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.2
+                    temperature=0.2,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
                 )
             )
 
-            parsed_recommendations = parse_gemini_json_response(response.text)
+            response_text = get_response_text_safely(response)
+            parsed_recommendations = parse_gemini_json_response(response_text)
 
             return normalize_learning_recommendations(
                 recommendation_data=parsed_recommendations,
@@ -1728,7 +1820,16 @@ def generate_learning_recommendations_with_gemini(
                 limit=limit
             )
 
+        except GeminiSafetyRefusalError:
+            # Güvenlik reddi durumunda doğrudan fırlatıyoruz
+            raise
         except Exception as error:
+            error_message = str(error)
+            if any(sig in error_message.lower() for sig in ["safety", "block", "harmful", "policy", "abuse", "finish_reason"]):
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle istek engellendi: {error_message}"
+                ) from error
+
             print(f"[Gemini Recommendation Error] Attempt {attempt}/{max_retries}: {error}")
 
             if attempt < max_retries:
@@ -2158,11 +2259,13 @@ def generate_weekly_quiz_with_gemini(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.3
+                    temperature=0.3,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
                 )
             )
 
-            parsed_quiz = parse_gemini_json_response(response.text)
+            response_text = get_response_text_safely(response)
+            parsed_quiz = parse_gemini_json_response(response_text)
 
             normalized_quiz = normalize_quiz_data(
                 quiz_data=parsed_quiz,
@@ -2173,8 +2276,16 @@ def generate_weekly_quiz_with_gemini(
 
             return shuffle_quiz_options(normalized_quiz)
 
+        except GeminiSafetyRefusalError:
+            # Güvenlik reddi durumunda doğrudan fırlatıyoruz
+            raise
         except Exception as e:
             error_message = str(e)
+            if any(sig in error_message.lower() for sig in ["safety", "block", "harmful", "policy", "abuse", "finish_reason"]):
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle istek engellendi: {error_message}"
+                ) from e
+
             print(f"[Gemini Quiz Error] Attempt {attempt}/{max_retries}: {error_message}")
 
             if attempt < max_retries:

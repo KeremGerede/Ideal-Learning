@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app import models, schemas
-from app.ai_service import generate_weekly_quiz_with_gemini
+from app.ai_service import generate_weekly_quiz_with_gemini, GeminiSafetyRefusalError
 from app.auth import get_current_user
 
 
@@ -66,6 +66,11 @@ def generate_weekly_quiz(
             question_count=5
         )
 
+    except GeminiSafetyRefusalError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu haftanın konusu güvenlik politikaları nedeniyle quiz oluşturmaya uygun değildir."
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,

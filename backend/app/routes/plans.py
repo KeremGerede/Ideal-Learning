@@ -322,6 +322,23 @@ def regenerate_plan_week(
     Sadece seçilen hafta değiştirilir; diğer haftalar korunur.
     """
 
+    # ============================================================
+    # HARMFUL CONTENT PRE-CHECK FOR REGISTRATION INSTRUCTION
+    # ============================================================
+    if request.user_instruction:
+        is_harmful, reason = is_harmful_learning_request(
+            topic=request.user_instruction,
+            goal=""
+        )
+        if is_harmful:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Bu talep güvenli öğrenme politikaları nedeniyle işlenemez. "
+                    "Lütfen farklı veya güvenli bir komut belirtin."
+                )
+            )
+
     plan = require_plan_ownership(plan_id, current_user, db)
 
     week = (
