@@ -1,7 +1,7 @@
 // src/pages/QuizResultsPage.jsx
 
 import { useEffect, useState } from "react";
-import { getAllQuizResults } from "../api/apiClient";
+import { getAllQuizResults, analyzeQuizResult } from "../api/apiClient";
 
 function QuizResultsPage() {
     /**
@@ -142,6 +142,36 @@ function QuizResultCard({ result }) {
 
     const score = result.score_percentage ?? 0;
 
+    // Parse initial analysis if it exists in result.analysis_json
+    const initialAnalysis = (() => {
+        if (result.analysis_json) {
+            try {
+                return JSON.parse(result.analysis_json);
+            } catch (e) {
+                console.error("Failed to parse analysis_json", e);
+            }
+        }
+        return null;
+    })();
+
+    const [analysis, setAnalysis] = useState(initialAnalysis);
+    const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+    const [analysisError, setAnalysisError] = useState("");
+
+    async function handleAnalyzeQuiz() {
+        if (!result.id) return;
+        try {
+            setLoadingAnalysis(true);
+            setAnalysisError("");
+            const data = await analyzeQuizResult(result.id);
+            setAnalysis(data);
+        } catch (error) {
+            setAnalysisError(error.message || "Analiz yüklenirken hata oluştu.");
+        } finally {
+            setLoadingAnalysis(false);
+        }
+    }
+
     return (
         <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl shadow-slate-950/30">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -189,6 +219,78 @@ function QuizResultCard({ result }) {
 
                     <QuizDetails detailsJson={result.details_json} />
                 </details>
+            )}
+
+            {/* Zayıf Konular Analizi Butonu & Kartı */}
+            {score < 100 && result.id && (
+                <div className="mt-5 pt-5 border-t border-slate-800/60">
+                    {!analysis && (
+                        <button
+                            type="button"
+                            onClick={handleAnalyzeQuiz}
+                            disabled={loadingAnalysis}
+                            className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:from-amber-400 hover:to-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {loadingAnalysis ? "Zayıf Konular Analiz Ediliyor..." : "🔍 AI ile Zayıf Konuları Analiz Et"}
+                        </button>
+                    )}
+
+                    {analysisError && (
+                        <div className="mt-3 rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-xs text-red-200">
+                            {analysisError}
+                        </div>
+                    )}
+
+                    {analysis && (
+                        <div className="mt-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 p-5">
+                            <h6 className="text-md font-bold text-indigo-300 flex items-center gap-2">
+                                💡 Yapay Zekâ Analiz Raporu
+                            </h6>
+                            
+                            <p className="mt-2 text-sm text-slate-300 italic">
+                                "{analysis.summary}"
+                            </p>
+
+                            {analysis.weak_topics && analysis.weak_topics.length > 0 && (
+                                <div className="mt-4">
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Tespit Edilen Zayıf Konular</span>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {analysis.weak_topics.map((topic, i) => (
+                                            <span key={i} className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-1 text-xs font-semibold text-red-200">
+                                                ⚠️ {topic}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {analysis.recommended_actions && analysis.recommended_actions.length > 0 && (
+                                <div className="mt-4">
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Gelişim Önerileri</span>
+                                    <ul className="mt-2 space-y-1.5 text-sm text-slate-300 list-disc list-inside">
+                                        {analysis.recommended_actions.map((action, i) => (
+                                            <li key={i}>{action}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {analysis.recommended_resources && analysis.recommended_resources.length > 0 && (
+                                <div className="mt-4 pt-4 border-t border-slate-800">
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Önerilen Arama Terimleri / Kaynaklar</span>
+                                    <ul className="mt-2 space-y-1.5 text-sm text-indigo-200">
+                                        {analysis.recommended_resources.map((resItem, i) => (
+                                            <li key={i} className="flex items-start gap-2">
+                                                <span>🔍</span>
+                                                <span>{resItem}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             )}
         </div>
     );
