@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_user
+from app.ai_service import analyze_quiz_results_with_gemini
 
 
 router = APIRouter(
@@ -161,3 +162,52 @@ def get_quiz_results_by_week(
     )
 
     return results
+
+
+@router.post("/{result_id}/analyze", response_model=schemas.QuizAnalysisResponse)
+def analyze_quiz_result(
+    result_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Belirli bir quiz sonucunu Gemini ile analiz ederek zayıf konuları ve çalışma önerilerini döndürür.
+    Analiz yapıldıktan sonra veritabanına cache'lenir.
+    """
+    result = db.query(models.QuizResult).filter(models.QuizResult.id == result_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Quiz sonucu bulunamadı.")
+
+    _verify_plan_ownership(result.plan_id, current_user, db)
+
+    if result.analysis_json:
+        try:
+            return json.loads(result.analysis_json)
+        except json.JSONDecodeError:
+            pass
+
+    if not result.details_json:
+        raise HTTPException(status_code=400, detail="Bu quiz sonucuna ait detaylı cevap bulunamadı.")
+
+    try:
+        details_list = json.loads(result.details_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Cevap detayları okunamadı (geçersiz format).")
+
+    plan = db.query(models.LearningPlan).filter(models.LearningPlan.id == result.plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Öğrenme planı bulunamadı.")
+
+    analysis_data = analyze_quiz_results_with_gemini(
+        quiz_title=result.quiz_title,
+        plan_topic=plan.topic,
+        plan_level=plan.level,
+        plan_goal=plan.goal,
+        details_list=details_list
+    )
+
+    result.analysis_json = json.dumps(analysis_data)
+    db.commit()
+
+    return analysis_data
+

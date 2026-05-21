@@ -126,5 +126,20 @@ class QuizResult(Base):
     score_percentage = Column(Integer, nullable=False)
 
     details_json = Column(Text, nullable=True)
+    analysis_json = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("learning_plans.id"), nullable=False)
+    week_id = Column(Integer, ForeignKey("plan_weeks.id"), nullable=True)
+    sender = Column(String, nullable=False)  # "user" veya "assistant"
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    plan = relationship("LearningPlan")
+    week = relationship("PlanWeek")

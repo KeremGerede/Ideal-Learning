@@ -7,8 +7,10 @@ import {
     getQuizResultsByPlan,
     updateTaskCompletion,
     regeneratePlanWeek,
+    analyzeQuizResult,
 } from "../api/apiClient";
 import WeeklyQuizPanel from "../components/WeeklyQuizPanel";
+import AITutorChat from "../components/AITutorChat";
 
 function PlanDetailPage({ planId, onBack }) {
     /**
@@ -32,6 +34,10 @@ function PlanDetailPage({ planId, onBack }) {
     // Checkbox güncellenirken sadece ilgili görevi kilitlemek için kullanılır.
     // Böylece tüm sayfa tekrar yüklenmez.
     const [updatingTaskIds, setUpdatingTaskIds] = useState([]);
+
+    // Kayıtlı geçmiş quizlerin AI analizi için stateler
+    const [loadingAnalyses, setLoadingAnalyses] = useState({});
+    const [analysisErrors, setAnalysisErrors] = useState({});
 
     // Haftaları accordion şeklinde açıp kapatmak için kullanılır.
     // İlk plan yüklendiğinde varsayılan olarak ilk hafta açık olacak.
@@ -349,6 +355,31 @@ function PlanDetailPage({ planId, onBack }) {
 
             return [...previousOpenWeekIds, weekId];
         });
+    }
+
+    async function handleAnalyzeQuizResult(resultId) {
+        if (!resultId) return;
+        try {
+            setLoadingAnalyses((prev) => ({ ...prev, [resultId]: true }));
+            setAnalysisErrors((prev) => ({ ...prev, [resultId]: "" }));
+            const data = await analyzeQuizResult(resultId);
+            
+            // Local state'teki quizResults listesini güncelleyerek analizi yerleştiriyoruz.
+            setQuizResults((prevResults) =>
+                prevResults.map((r) =>
+                    r.id === resultId
+                        ? { ...r, analysis_json: JSON.stringify(data) }
+                        : r
+                )
+            );
+        } catch (error) {
+            setAnalysisErrors((prev) => ({
+                ...prev,
+                [resultId]: error.message || "Analiz yüklenirken hata oluştu.",
+            }));
+        } finally {
+            setLoadingAnalyses((prev) => ({ ...prev, [resultId]: false }));
+        }
     }
 
     useEffect(() => {
@@ -759,11 +790,114 @@ function PlanDetailPage({ planId, onBack }) {
                                         <QuizDetails detailsJson={result.details_json} />
                                     </details>
                                 )}
+
+                                {/* Zayıf Konular Analizi Butonu & Kartı */}
+                                {result.score_percentage < 100 && (
+                                    <div className="mt-4 pt-4 border-t border-slate-800/60">
+                                        {!result.analysis_json ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleAnalyzeQuizResult(result.id)}
+                                                disabled={loadingAnalyses[result.id]}
+                                                className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-orange-500/20 transition hover:from-amber-400 hover:to-orange-500 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+                                            >
+                                                {loadingAnalyses[result.id]
+                                                    ? "Zayıf Konular Analiz Ediliyor..."
+                                                    : "🔍 AI ile Zayıf Konuları Analiz Et"}
+                                            </button>
+                                        ) : (
+                                            (() => {
+                                                let analysis = null;
+                                                try {
+                                                    analysis =
+                                                        typeof result.analysis_json === "string"
+                                                            ? JSON.parse(result.analysis_json)
+                                                            : result.analysis_json;
+                                                } catch (e) {
+                                                    analysis = null;
+                                                }
+                                                if (!analysis) return null;
+                                                return (
+                                                    <div className="mt-3 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 p-4">
+                                                        <h6 className="text-sm font-bold text-indigo-300 flex items-center gap-2">
+                                                            💡 Yapay Zekâ Analiz Raporu
+                                                        </h6>
+
+                                                        <p className="mt-2 text-xs text-slate-300 italic">
+                                                            "{analysis.summary}"
+                                                        </p>
+
+                                                        {analysis.weak_topics &&
+                                                            analysis.weak_topics.length > 0 && (
+                                                                <div className="mt-3">
+                                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                                                        Tespit Edilen Zayıf Konular
+                                                                    </span>
+                                                                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                                        {analysis.weak_topics.map((topic, i) => (
+                                                                            <span
+                                                                                key={i}
+                                                                                className="rounded-lg bg-red-500/10 border border-red-500/30 px-2 py-0.5 text-[10px] font-semibold text-red-200"
+                                                                            >
+                                                                                ⚠️ {topic}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                        {analysis.recommended_actions &&
+                                                            analysis.recommended_actions.length > 0 && (
+                                                                <div className="mt-3">
+                                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                                                        Gelişim Önerileri
+                                                                    </span>
+                                                                    <ul className="mt-1 space-y-1 text-xs text-slate-300 list-disc list-inside">
+                                                                        {analysis.recommended_actions.map((action, i) => (
+                                                                            <li key={i}>{action}</li>
+                                                                        ))}
+                                                                    </ul>
+                                                                </div>
+                                                            )}
+
+                                                        {analysis.recommended_resources &&
+                                                            analysis.recommended_resources.length > 0 && (
+                                                                <div className="mt-3 pt-3 border-t border-slate-800">
+                                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                                                        Önerilen Arama Terimleri / Kaynaklar
+                                                                    </span>
+                                                                    <ul className="mt-1 space-y-1 text-xs text-indigo-200">
+                                                                        {analysis.recommended_resources.map(
+                                                                            (resItem, i) => (
+                                                                                <li key={i} className="flex items-start gap-1.5">
+                                                                                    <span>🔍</span>
+                                                                                    <span>{resItem}</span>
+                                                                                </li>
+                                                                            )
+                                                                        )}
+                                                                    </ul>
+                                                                </div>
+                                                            )}
+                                                    </div>
+                                                );
+                                            })()
+                                        )}
+
+                                        {analysisErrors[result.id] && (
+                                            <div className="mt-2 rounded-xl border border-red-900/60 bg-red-950/40 px-3 py-2 text-[10px] text-red-200">
+                                                {analysisErrors[result.id]}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
                 )}
             </section>
+
+            {/* AI Tutor Chatbot */}
+            <AITutorChat plan={plan} weeks={plan.weeks} openWeekIds={openWeekIds} />
         </div>
     );
 }

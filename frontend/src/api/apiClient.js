@@ -283,3 +283,50 @@ export async function getLearningRecommendations(limit = 6) {
 
     return response.json();
 }
+
+// ================================================================
+// QUIZ ANALYSIS
+// ================================================================
+
+export async function analyzeQuizResult(resultId) {
+    const response = await apiFetch(`${API_BASE_URL}/quiz-results/${resultId}/analyze`, {
+        method: "POST"
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Quiz analizi oluşturulamadı.");
+    }
+
+    return response.json();
+}
+
+// ================================================================
+// AI TUTOR CHAT
+// ================================================================
+
+export async function getChatMessages(planId) {
+    const response = await apiFetch(`${API_BASE_URL}/chat/plans/${planId}/messages`);
+
+    if (!response.ok) {
+        throw new Error("Sohbet geçmişi alınamadı.");
+    }
+
+    return response.json();
+}
+
+export async function askAITutor(planId, payload) {
+    const response = await apiFetch(`${API_BASE_URL}/chat/plans/${planId}/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Eğitmen yanıtlayamadı.");
+    }
+
+    return response.json();
+}
+

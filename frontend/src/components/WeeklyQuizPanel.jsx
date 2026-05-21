@@ -1,7 +1,7 @@
 // src/components/WeeklyQuizPanel.jsx
 
 import { useState } from "react";
-import { generateWeeklyQuiz, saveQuizResult } from "../api/apiClient";
+import { generateWeeklyQuiz, saveQuizResult, analyzeQuizResult } from "../api/apiClient";
 
 function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
     /**
@@ -21,6 +21,11 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
     const [savingResult, setSavingResult] = useState(false);
     const [errorMessage, setErrorMessage] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
+    
+    // AI Analizi için yeni stateler
+    const [analysis, setAnalysis] = useState(null);
+    const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+    const [analysisError, setAnalysisError] = useState("");
 
     async function handleGenerateQuiz() {
         /**
@@ -34,6 +39,8 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
             setSuccessMessage("");
             setSelectedAnswers({});
             setQuizResult(null);
+            setAnalysis(null);
+            setAnalysisError("");
 
             const quizData = await generateWeeklyQuiz(planId, week.id);
 
@@ -112,7 +119,7 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
             setErrorMessage("");
             setSuccessMessage("");
 
-            await saveQuizResult({
+            const savedResult = await saveQuizResult({
                 plan_id: planId,
                 week_id: week.id,
                 quiz_title: quiz.quiz_title || `${week.title} Quiz`,
@@ -121,6 +128,14 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
 
                 // Backend details_json alanını string olarak bekliyor.
                 details_json: JSON.stringify(detailedResults),
+            });
+
+            setQuizResult({
+                id: savedResult.id,
+                correct_count: correctCount,
+                total_questions: totalQuestions,
+                score_percentage: scorePercentage,
+                detailed_results: detailedResults,
             });
 
             setSuccessMessage("Quiz sonucu başarıyla kaydedildi.");
@@ -136,6 +151,21 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
             setSavingResult(false);
         }
     }
+
+    async function handleAnalyzeQuiz(resultId) {
+        if (!resultId) return;
+        try {
+            setLoadingAnalysis(true);
+            setAnalysisError("");
+            const data = await analyzeQuizResult(resultId);
+            setAnalysis(data);
+        } catch (error) {
+            setAnalysisError(error.message || "Analiz yüklenirken hata oluştu.");
+        } finally {
+            setLoadingAnalysis(false);
+        }
+    }
+
 
     return (
         <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/50 p-5">
@@ -292,6 +322,78 @@ function WeeklyQuizPanel({ planId, week, onQuizSaved }) {
                             ))}
                         </div>
                     </details>
+
+                    {/* Zayıf Konular Analizi Butonu & Kartı */}
+                    {quizResult.score_percentage < 100 && quizResult.id && (
+                        <div className="mt-5 pt-5 border-t border-slate-800/60">
+                            {!analysis && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleAnalyzeQuiz(quizResult.id)}
+                                    disabled={loadingAnalysis}
+                                    className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:from-amber-400 hover:to-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {loadingAnalysis ? "Zayıf Konular Analiz Ediliyor..." : "🔍 AI ile Zayıf Konuları Analiz Et"}
+                                </button>
+                            )}
+
+                            {analysisError && (
+                                <div className="mt-3 rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-xs text-red-200">
+                                    {analysisError}
+                                </div>
+                            )}
+
+                            {analysis && (
+                                <div className="mt-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 p-5">
+                                    <h6 className="text-md font-bold text-indigo-300 flex items-center gap-2">
+                                        💡 Yapay Zekâ Analiz Raporu
+                                    </h6>
+                                    
+                                    <p className="mt-2 text-sm text-slate-300 italic">
+                                        "{analysis.summary}"
+                                    </p>
+
+                                    {analysis.weak_topics && analysis.weak_topics.length > 0 && (
+                                        <div className="mt-4">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Tespit Edilen Zayıf Konular</span>
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                {analysis.weak_topics.map((topic, i) => (
+                                                    <span key={i} className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-1 text-xs font-semibold text-red-200">
+                                                        ⚠️ {topic}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {analysis.recommended_actions && analysis.recommended_actions.length > 0 && (
+                                        <div className="mt-4">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Gelişim Önerileri</span>
+                                            <ul className="mt-2 space-y-1.5 text-sm text-slate-300 list-disc list-inside">
+                                                {analysis.recommended_actions.map((action, i) => (
+                                                    <li key={i}>{action}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    {analysis.recommended_resources && analysis.recommended_resources.length > 0 && (
+                                        <div className="mt-4 pt-4 border-t border-slate-800">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Önerilen Arama Terimleri / Kaynaklar</span>
+                                            <ul className="mt-2 space-y-1.5 text-sm text-indigo-200">
+                                                {analysis.recommended_resources.map((resItem, i) => (
+                                                    <li key={i} className="flex items-start gap-2">
+                                                        <span>🔍</span>
+                                                        <span>{resItem}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
         </div>

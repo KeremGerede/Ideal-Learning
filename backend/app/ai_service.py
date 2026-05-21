@@ -2390,3 +2390,190 @@ def generate_fallback_weekly_quiz(
         "quiz_title": f"{week_title} Quiz",
         "questions": selected_questions
     }
+
+
+# ============================================================
+# QUIZ ANALYSIS FUNCTION
+# ============================================================
+
+def analyze_quiz_results_with_gemini(
+    quiz_title: str,
+    plan_topic: str,
+    plan_level: str,
+    plan_goal: str,
+    details_list: list[dict]
+) -> Dict[str, Any]:
+    """
+    Gemini ile quiz sonuçlarındaki yanlış cevapları analiz ederek zayıf konuları ve önerileri tespit eder.
+    """
+    if client is None:
+        # Fallback analysis
+        return {
+            "weak_topics": [f"{plan_topic} Temelleri"],
+            "summary": "AI Analiz hizmeti şu anda kullanılamıyor. Lütfen quizi genel olarak gözden geçirin.",
+            "recommended_actions": ["Yanlış yaptığınız soruların çözümlerini detaylarıyla inceleyin."],
+            "recommended_resources": [f"Google üzerinde '{plan_topic} fundamentals' kelimeleriyle arama yapın."]
+        }
+
+    # Format the quiz details nicely for Gemini
+    formatted_details = []
+    for item in details_list:
+        status = "Doğru" if item.get("is_correct") else "Yanlış"
+        formatted_details.append(
+            f"Soru: {item.get('question')}\n"
+            f"Kullanıcının Cevabı: {item.get('selected_answer') or 'Boş'}\n"
+            f"Doğru Cevap: {item.get('correct_answer')}\n"
+            f"Durum: {status}\n"
+            f"Açıklama: {item.get('explanation')}\n"
+            "---"
+        )
+    formatted_details_str = "\n".join(formatted_details)
+
+    prompt = f"""
+Sistemin Öğrenme Konusu: "{plan_topic}"
+Kullanıcı Seviyesi: "{plan_level}"
+Öğrenme Hedefi: "{plan_goal}"
+Quiz Başlığı: "{quiz_title}"
+
+Kullanıcının çözdüğü quize ait soru ve cevap detayları aşağıdadır:
+{formatted_details_str}
+
+Lütfen bu sonuçları analiz et. Özellikle kullanıcının yanlış cevapladığı sorulara odaklanarak zayıf kaldığı veya anlamadığı alt konuları (weak topics) belirle.
+Sonucu sadece Türkçe olarak ve aşağıdaki JSON formatında döndür. JSON dışında hiçbir açıklama veya markdown bloğu (```json gibi) ekleme.
+
+Format:
+{{
+  "weak_topics": ["Zayıf olunan alt konu 1", "Zayıf olunan alt konu 2"],
+  "summary": "Kullanıcının quiz genelindeki durumunun, nerede zorlandığının kısa bir özeti.",
+  "recommended_actions": [
+    "Kullanıcıya özel somut ve uygulanabilir çalışma önerisi 1",
+    "Kullanıcıya özel somut ve uygulanabilir çalışma önerisi 2"
+  ],
+  "recommended_resources": [
+    "Kullanıcının bu eksikleri kapatmak için yapabileceği spesifik arama terimleri veya resmi doküman önerileri"
+  ]
+}}
+"""
+
+    max_attempts = 3
+    last_error = None
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.3,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
+                )
+            )
+            response_text = get_response_text_safely(response)
+            parsed_analysis = parse_gemini_json_response(response_text)
+
+            return {
+                "weak_topics": parsed_analysis.get("weak_topics", []),
+                "summary": parsed_analysis.get("summary", "Analiz başarıyla tamamlandı."),
+                "recommended_actions": parsed_analysis.get("recommended_actions", []),
+                "recommended_resources": parsed_analysis.get("recommended_resources", [])
+            }
+        except Exception as e:
+            last_error = e
+            print(f"[Gemini Quiz Analysis Attempt {attempt}/{max_attempts} Failed]: {e}")
+            if attempt < max_attempts:
+                import time
+                time.sleep(1)
+
+    print(f"[Gemini Quiz Analysis Error - All Attempts Failed]: {last_error}")
+    return {
+        "weak_topics": ["İlgili Konular"],
+        "summary": f"Analiz sırasında hata oluştu ({last_error}). Lütfen yanlış cevaplarınızı inceleyin.",
+        "recommended_actions": ["Yanlış yaptığınız konulara ait görevleri tekrar gözden geçirin."],
+        "recommended_resources": ["Resmi dokümanları kontrol edin."]
+    }
+
+
+# ============================================================
+# AI TUTOR CHAT FUNCTION
+# ============================================================
+
+def ask_ai_tutor_with_gemini(
+    plan_topic: str,
+    plan_level: str,
+    plan_goal: str,
+    week_title: str | None,
+    week_description: str | None,
+    tasks: list[str],
+    chat_history: list[dict],
+    user_message: str
+) -> str:
+    """
+    Kullanıcının o anki planı ve haftalık görevleriyle ilgili sorularını cevaplayan AI Eğitmeni.
+    """
+    if client is None:
+        return "Gemini API key tanımlı değil. AI Eğitmeni şu anda çevrimdışı."
+
+    # Build history context
+    history_str = ""
+    for msg in chat_history:
+        sender_label = "Öğrenci" if msg["sender"] == "user" else "Eğitmen"
+        history_str += f"{sender_label}: {msg['message']}\n"
+
+    # Context about the active week
+    week_context = ""
+    if week_title:
+        week_context = (
+            f"Kullanıcının Şu Anda Çalıştığı Hafta: {week_title}\n"
+            f"Hafta Açıklaması: {week_description or 'Yok'}\n"
+            f"Haftalık Görevler:\n" + "\n".join([f"- {t}" for t in tasks])
+        )
+    else:
+        week_context = "Kullanıcı genel plan sayfasında, belirli bir haftayı incelemiyor."
+
+    system_instruction = (
+        "Sen yapay zekâ destekli kişisel öğrenme platformunda uzman bir Yazılım ve Teknik Eğitmensin (AI Tutor).\n"
+        "Görevin, öğrencinin sorularını nazikçe, motive edici, son derece açıklayıcı ve teknik olarak doğru şekilde yanıtlamaktır.\n"
+        "Yanıtlarında öğrencilere kod örnekleri sunabilir, teknik kavramları analojilerle açıklayabilirsin.\n"
+        "Öğrencinin öğrenme planı ve şu anda çalıştığı haftanın detayları sana verilecektir. Yanıtlarını bu bağlamla doğrudan ilişkilendir.\n"
+        "Yanıtlarını Türkçe olarak ver. Kısa ve öz tut, ancak kod örnekleri veya detay gerektiğinde cömert ol. Markdown formatını kullanabilirsin."
+    )
+
+    prompt = f"""
+--- BAĞLAM ---
+Öğrenilen Konu: {plan_topic}
+Öğrencinin Seviyesi: {plan_level}
+Öğrencinin Hedefi: {plan_goal}
+
+{week_context}
+
+--- SOHBET GEÇMİŞİ ---
+{history_str}
+Öğrenci: {user_message}
+Eğitmen:
+"""
+
+    max_attempts = 3
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.7,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
+                )
+            )
+            return get_response_text_safely(response)
+        except Exception as e:
+            last_error = e
+            print(f"[Gemini AI Tutor Attempt {attempt}/{max_attempts} Failed]: {e}")
+            if attempt < max_attempts:
+                import time
+                time.sleep(1)
+
+    print(f"[Gemini AI Tutor Error - All Attempts Failed]: {last_error}")
+    return f"Üzgünüm, sorunuzu işlerken teknik bir hata oluştu ({last_error}). Lütfen tekrar deneyin."

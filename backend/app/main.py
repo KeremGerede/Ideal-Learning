@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
-from app.routes import plans, tasks, quiz, stats, quiz_results, recommendations
+from app.routes import plans, tasks, quiz, stats, quiz_results, recommendations, chat
 from app.routes import auth
 from app import models
 
@@ -15,6 +15,20 @@ from app import models
 # reflected here on first startup after deleting learning.db.
 
 Base.metadata.create_all(bind=engine)
+
+# ============================================================
+# SAFE DATABASE SCHEMA UPDATE (MIGRATION)
+# ============================================================
+# Automatically adds the new columns if they do not exist.
+from sqlalchemy import text
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE quiz_results ADD COLUMN analysis_json TEXT;"))
+        conn.commit()
+        print("[DB Migration] analysis_json column successfully added to quiz_results.")
+    except Exception:
+        # If the column already exists, this block will fail silently, which is correct.
+        pass
 
 
 # ============================================================
@@ -83,3 +97,4 @@ app.include_router(quiz.router)
 app.include_router(stats.router)
 app.include_router(quiz_results.router)
 app.include_router(recommendations.router)
+app.include_router(chat.router)

@@ -161,10 +161,39 @@ class QuizResultResponse(BaseModel):
     total_questions: int
     score_percentage: float
     details_json: Optional[str] = None
+    analysis_json: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# ================================================================
+# CHAT SCHEMAS
+# ================================================================
+
+class ChatMessageCreate(BaseModel):
+    message: str
+    week_id: Optional[int] = None
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    plan_id: int
+    week_id: Optional[int] = None
+    sender: str
+    message: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class QuizAnalysisResponse(BaseModel):
+    weak_topics: List[str]
+    summary: str
+    recommended_actions: List[str]
+    recommended_resources: List[str]
 
 
 # ================================================================
