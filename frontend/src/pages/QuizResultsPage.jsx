@@ -1,7 +1,7 @@
 // src/pages/QuizResultsPage.jsx
 
 import { useEffect, useState } from "react";
-import { getAllQuizResults, analyzeQuizResult } from "../api/apiClient";
+import { getAllQuizResults, analyzeQuizResult, adaptPlanFromQuiz } from "../api/apiClient";
 
 function QuizResultsPage() {
     /**
@@ -172,6 +172,27 @@ function QuizResultCard({ result }) {
         }
     }
 
+    const [isAdapted, setIsAdapted] = useState(result.is_adapted || false);
+    const [adapting, setAdapting] = useState(false);
+    const [adaptSuccess, setAdaptSuccess] = useState("");
+    const [adaptError, setAdaptError] = useState("");
+
+    async function handleAdaptCurriculum() {
+        if (!result.id || !result.plan_id) return;
+        try {
+            setAdapting(true);
+            setAdaptError("");
+            setAdaptSuccess("");
+            await adaptPlanFromQuiz(result.plan_id, result.id);
+            setIsAdapted(true);
+            setAdaptSuccess("Müfredat zayıf konularına göre uyarlandı! Bir sonraki haftaya tekrar görevleri eklendi.");
+        } catch (error) {
+            setAdaptError(error.message || "Müfredat uyarlanırken hata oluştu.");
+        } finally {
+            setAdapting(false);
+        }
+    }
+
     return (
         <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl shadow-slate-950/30">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -288,6 +309,37 @@ function QuizResultCard({ result }) {
                                     </ul>
                                 </div>
                             )}
+
+                            {/* Müfredat Uyumlama Butonu */}
+                            <div className="mt-5 pt-4 border-t border-slate-800/80">
+                                {isAdapted ? (
+                                    <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs font-semibold text-emerald-300">
+                                        <span>✓ Müfredat bu analize göre uyarlandı (Zayıf konu tekrar görevleri eklendi).</span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={handleAdaptCurriculum}
+                                            disabled={adapting}
+                                            className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/10 transition hover:from-indigo-400 hover:to-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {adapting ? "Müfredat Güncelleniyor..." : "🔄 Müfredatı Zayıf Konulara Göre Güncelle"}
+                                        </button>
+                                        
+                                        {adaptError && (
+                                            <div className="mt-2 text-xs text-red-400">
+                                                {adaptError}
+                                            </div>
+                                        )}
+                                        {adaptSuccess && (
+                                            <div className="mt-2 text-xs text-emerald-400 font-medium">
+                                                {adaptSuccess}
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>

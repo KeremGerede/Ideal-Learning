@@ -8,6 +8,7 @@ import {
     updateTaskCompletion,
     regeneratePlanWeek,
     analyzeQuizResult,
+    adaptPlanFromQuiz,
 } from "../api/apiClient";
 import WeeklyQuizPanel from "../components/WeeklyQuizPanel";
 import AITutorChat from "../components/AITutorChat";
@@ -51,6 +52,31 @@ function PlanDetailPage({ planId, onBack }) {
 
     // Her hafta için AI ile yenileme kutusunun görünürlüğünü yönetir.
     const [visibleRegenerateBoxes, setVisibleRegenerateBoxes] = useState({});
+
+    // Müfredat adaptasyonu için yeni stateler
+    const [adaptingQuizIds, setAdaptingQuizIds] = useState({});
+    const [adaptSuccessQuizIds, setAdaptSuccessQuizIds] = useState({});
+    const [adaptErrorQuizIds, setAdaptErrorQuizIds] = useState({});
+
+    async function handleAdaptCurriculumFromQuiz(quizResultId) {
+        if (!quizResultId) return;
+        try {
+            setAdaptingQuizIds(prev => ({ ...prev, [quizResultId]: true }));
+            setAdaptErrorQuizIds(prev => ({ ...prev, [quizResultId]: "" }));
+            setAdaptSuccessQuizIds(prev => ({ ...prev, [quizResultId]: "" }));
+            
+            await adaptPlanFromQuiz(plan.id, quizResultId);
+            
+            setAdaptSuccessQuizIds(prev => ({ ...prev, [quizResultId]: "Müfredat zayıf konularına göre uyarlandı! Bir sonraki haftaya tekrar görevleri eklendi." }));
+            
+            // Reload plan details to see the new tasks and updated is_adapted flags!
+            await loadPlanDetail();
+        } catch (error) {
+            setAdaptErrorQuizIds(prev => ({ ...prev, [quizResultId]: error.message || "Müfredat uyarlanırken hata oluştu." }));
+        } finally {
+            setAdaptingQuizIds(prev => ({ ...prev, [quizResultId]: false }));
+        }
+    }
 
     async function loadPlanDetail() {
         /**
@@ -640,40 +666,54 @@ function PlanDetailPage({ planId, onBack }) {
                                             <h5 className="font-bold text-slate-100">Görevler</h5>
 
                                             <div className="mt-3 space-y-3">
-                                                {weekTasks.map((task) => (
-                                                    <label
-                                                        key={task.id}
-                                                        className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 transition hover:border-indigo-500/50"
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={Boolean(task.is_completed)}
-                                                            disabled={updatingTaskIds.includes(task.id)}
-                                                            onChange={(event) =>
-                                                                handleTaskToggle(task.id, event.target.checked)
-                                                            }
-                                                            className="mt-1 h-4 w-4 accent-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        />
-
-                                                        <div className="flex-1">
-                                                            <p
-                                                                className={
-                                                                    task.is_completed
-                                                                        ? "text-sm font-semibold text-slate-500 line-through"
-                                                                        : "text-sm font-semibold text-slate-100"
+                                                {weekTasks.map((task) => {
+                                                    const isReviewTask = task.task_type === "review" || task.task_text?.includes("[Zayıf Konu");
+                                                    return (
+                                                        <label
+                                                            key={task.id}
+                                                            className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${
+                                                                isReviewTask
+                                                                    ? "border-amber-500/25 bg-amber-950/15 hover:border-amber-500/50"
+                                                                    : "border-slate-800 bg-slate-950/50 hover:border-indigo-500/50"
+                                                            }`}
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(task.is_completed)}
+                                                                disabled={updatingTaskIds.includes(task.id)}
+                                                                onChange={(event) =>
+                                                                    handleTaskToggle(task.id, event.target.checked)
                                                                 }
-                                                            >
-                                                                {task.task_text}
-                                                            </p>
+                                                                className="mt-1 h-4 w-4 accent-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            />
 
-                                                            <p className="mt-2 text-xs text-slate-500">
-                                                                {task.task_type || "Görev"} |{" "}
-                                                                {task.estimated_minutes || 0} dk |{" "}
-                                                                {task.difficulty || "Orta"}
-                                                            </p>
-                                                        </div>
-                                                    </label>
-                                                ))}
+                                                            <div className="flex-1">
+                                                                {isReviewTask && (
+                                                                    <div className="mb-1.5">
+                                                                        <span className="inline-flex items-center rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                                                                            ⚡ Tekrar / Zayıf Konu
+                                                                        </span>
+                                                                    </div>
+                                                                )}
+                                                                <p
+                                                                    className={
+                                                                        task.is_completed
+                                                                            ? "text-sm font-semibold text-slate-500 line-through"
+                                                                            : "text-sm font-semibold text-slate-100"
+                                                                    }
+                                                                >
+                                                                    {task.task_text}
+                                                                </p>
+
+                                                                <p className="mt-2 text-xs text-slate-500">
+                                                                    {task.task_type || "Görev"} |{" "}
+                                                                    {task.estimated_minutes || 0} dk |{" "}
+                                                                    {task.difficulty || "Orta"}
+                                                                </p>
+                                                            </div>
+                                                        </label>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
 
@@ -878,6 +918,31 @@ function PlanDetailPage({ planId, onBack }) {
                                                                     </ul>
                                                                 </div>
                                                             )}
+
+                                                        {/* Müfredat Uyumlama Butonu */}
+                                                        <div className="mt-4 pt-3 border-t border-slate-800/80">
+                                                            {adaptSuccessQuizIds[result.id] || result.is_adapted ? (
+                                                                <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-[10px] font-semibold text-emerald-300">
+                                                                    <span>✓ Müfredat bu analize göre uyarlandı (Zayıf konu tekrar görevleri eklendi).</span>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleAdaptCurriculumFromQuiz(result.id)}
+                                                                        disabled={adaptingQuizIds[result.id]}
+                                                                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 px-3 py-2 text-[11px] font-bold text-white shadow-md shadow-indigo-500/10 transition hover:from-indigo-400 hover:to-purple-500 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+                                                                    >
+                                                                        {adaptingQuizIds[result.id] ? "Müfredat Güncelleniyor..." : "🔄 Müfredatı Zayıf Konulara Göre Güncelle"}
+                                                                    </button>
+                                                                    {adaptErrorQuizIds[result.id] && (
+                                                                        <div className="mt-2 text-[10px] text-red-400">
+                                                                            {adaptErrorQuizIds[result.id]}
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 );
                                             })()

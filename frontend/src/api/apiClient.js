@@ -173,6 +173,27 @@ export async function getPlanById(planId) {
     return response.json();
 }
 
+export async function adaptPlanFromQuiz(planId, quizResultId) {
+    const response = await apiFetch(
+        `${API_BASE_URL}/plans/${planId}/adapt-from-quiz/${quizResultId}`,
+        {
+            method: "POST"
+        }
+    );
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        try {
+            const parsed = JSON.parse(errorText);
+            throw new Error(parsed.detail || errorText);
+        } catch (e) {
+            throw new Error(errorText || "Müfredat güncellenemedi.");
+        }
+    }
+
+    return response.json();
+}
+
 // ================================================================
 // TASKS
 // ================================================================

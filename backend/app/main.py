@@ -27,7 +27,13 @@ with engine.connect() as conn:
         conn.commit()
         print("[DB Migration] analysis_json column successfully added to quiz_results.")
     except Exception:
-        # If the column already exists, this block will fail silently, which is correct.
+        pass
+
+    try:
+        conn.execute(text("ALTER TABLE quiz_results ADD COLUMN is_adapted BOOLEAN DEFAULT 0;"))
+        conn.commit()
+        print("[DB Migration] is_adapted column successfully added to quiz_results.")
+    except Exception:
         pass
 
 

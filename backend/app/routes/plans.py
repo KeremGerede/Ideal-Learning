@@ -6,6 +6,7 @@ from app import models, schemas
 from app.ai_service import (
     generate_learning_plan_with_gemini,
     generate_regenerated_week_with_gemini,
+    adapt_week_with_quiz_analysis_with_gemini,
     GeminiSafetyRefusalError,
 )
 from app.auth import get_current_user
@@ -436,6 +437,186 @@ def regenerate_plan_week(
             resource_url=resource_data.get("resource_url"),
         )
         db.add(new_resource)
+
+    db.commit()
+
+    return get_plan_with_details(db=db, plan_id=plan_id)
+
+
+@router.post("/{plan_id}/adapt-from-quiz/{quiz_result_id}", response_model=schemas.PlanResponse)
+def adapt_plan_from_quiz(
+    plan_id: int,
+    quiz_result_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Kullanıcının quiz analizine (zayıf konular) göre müfredatı adapte eder.
+    Bir sonraki haftaya veya son haftaysa mevcut haftaya tekrar görevleri & kaynakları ekler.
+    """
+    import json
+
+    plan = require_plan_ownership(plan_id, current_user, db)
+
+    quiz_result = (
+        db.query(models.QuizResult)
+        .filter(
+            models.QuizResult.id == quiz_result_id,
+            models.QuizResult.plan_id == plan_id
+        )
+        .first()
+    )
+    if not quiz_result:
+        raise HTTPException(status_code=404, detail="Quiz sonucu bulunamadı.")
+
+    if quiz_result.is_adapted:
+        raise HTTPException(status_code=400, detail="Bu quiz sonucu için müfredat zaten uyarlandı.")
+
+    if not quiz_result.analysis_json:
+        raise HTTPException(
+            status_code=400,
+            detail="Quiz analiz sonucu bulunamadı. Lütfen önce quiz analizini gerçekleştirin."
+        )
+
+    try:
+        analysis_data = json.loads(quiz_result.analysis_json)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Quiz analiz verisi okunamadı.")
+
+    weak_topics = analysis_data.get("weak_topics", [])
+    recommended_actions = analysis_data.get("recommended_actions", [])
+
+    if not weak_topics and not recommended_actions:
+        raise HTTPException(
+            status_code=400,
+            detail="Analiz sonucunda zayıf konu veya önerilen eylem bulunmadığı için müfredat uyarlaması yapılamaz."
+        )
+
+    # Quiz haftasını bul
+    quiz_week = (
+        db.query(models.PlanWeek)
+        .filter(
+            models.PlanWeek.id == quiz_result.week_id,
+            models.PlanWeek.plan_id == plan_id
+        )
+        .first()
+    )
+    if not quiz_week:
+        raise HTTPException(status_code=404, detail="Quizin ait olduğu hafta bulunamadı.")
+
+    # Hedef haftayı belirle (N + 1 veya son haftaysa N)
+    n = quiz_week.week_number
+    target_week_number = n + 1 if n < plan.duration_weeks else n
+
+    target_week = (
+        db.query(models.PlanWeek)
+        .filter(
+            models.PlanWeek.plan_id == plan_id,
+            models.PlanWeek.week_number == target_week_number
+        )
+        .first()
+    )
+    if not target_week:
+        raise HTTPException(status_code=404, detail=f"Hedef hafta (Hafta {target_week_number}) bulunamadı.")
+
+    # Mevcut görevler ve kaynakları topla
+    target_week_tasks = [
+        {
+            "id": t.id,
+            "task_text": t.task_text,
+            "task_type": t.task_type,
+            "estimated_minutes": t.estimated_minutes,
+            "difficulty": t.difficulty,
+            "is_completed": t.is_completed
+        }
+        for t in target_week.tasks
+    ]
+    target_week_resources = [
+        {
+            "id": r.id,
+            "resource_title": r.resource_title,
+            "resource_type": r.resource_type,
+            "resource_description": r.resource_description,
+            "resource_url": r.resource_url
+        }
+        for r in target_week.resources
+    ]
+
+    # Gemini ile adaptasyon gerçekleştir
+    try:
+        adapted_data = adapt_week_with_quiz_analysis_with_gemini(
+            plan_topic=plan.topic,
+            plan_level=plan.level,
+            plan_goal=plan.goal,
+            plan_weekly_hours=plan.weekly_hours,
+            plan_learning_preference=plan.learning_preference,
+            target_week_number=target_week.week_number,
+            target_week_title=target_week.title,
+            target_week_description=target_week.description,
+            target_week_mini_project=target_week.mini_project,
+            target_week_tasks=target_week_tasks,
+            target_week_resources=target_week_resources,
+            weak_topics=weak_topics,
+            recommended_actions=recommended_actions
+        )
+    except GeminiSafetyRefusalError:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu istek güvenlik politikaları nedeniyle engellendi."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Müfredat uyarlanırken bir hata oluştu: {str(e)}"
+        )
+
+    # Tamamlanma durumlarını korumak için eşleştirme map'i
+    original_completed_map = {t["task_text"]: t["is_completed"] for t in target_week_tasks}
+
+    # Hedef haftayı güncelle
+    if adapted_data.get("title"):
+        target_week.title = adapted_data["title"]
+    if adapted_data.get("description"):
+        target_week.description = adapted_data["description"]
+    if adapted_data.get("estimated_hours"):
+        target_week.estimated_hours = adapted_data["estimated_hours"]
+    if adapted_data.get("mini_project"):
+        target_week.mini_project = adapted_data["mini_project"]
+
+    # Eski görevleri ve kaynakları sil
+    for t in list(target_week.tasks):
+        db.delete(t)
+    for r in list(target_week.resources):
+        db.delete(r)
+    db.flush()
+
+    # Yeni görevleri ekle
+    for task_data in adapted_data.get("tasks", []):
+        task_text = task_data["task_text"]
+        is_completed = original_completed_map.get(task_text, False)
+        new_task = models.PlanTask(
+            week_id=target_week.id,
+            task_text=task_text,
+            task_type=task_data.get("task_type") or "Uygulama",
+            estimated_minutes=task_data.get("estimated_minutes") or 60,
+            difficulty=task_data.get("difficulty") or "Orta",
+            is_completed=is_completed
+        )
+        db.add(new_task)
+
+    # Yeni kaynakları ekle
+    for resource_data in adapted_data.get("resources", []):
+        new_resource = models.PlanResource(
+            week_id=target_week.id,
+            resource_title=resource_data["resource_title"],
+            resource_type=resource_data.get("resource_type") or "Dokümantasyon",
+            resource_description=resource_data.get("resource_description") or "",
+            resource_url=resource_data.get("resource_url")
+        )
+        db.add(new_resource)
+
+    # Quiz sonucunu güncellendi olarak işaretle
+    quiz_result.is_adapted = True
 
     db.commit()
 

@@ -162,6 +162,7 @@ class QuizResultResponse(BaseModel):
     score_percentage: float
     details_json: Optional[str] = None
     analysis_json: Optional[str] = None
+    is_adapted: Optional[bool] = False
     created_at: datetime
 
     class Config:

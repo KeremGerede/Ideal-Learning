@@ -127,6 +127,7 @@ class QuizResult(Base):
 
     details_json = Column(Text, nullable=True)
     analysis_json = Column(Text, nullable=True)
+    is_adapted = Column(Boolean, default=False, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

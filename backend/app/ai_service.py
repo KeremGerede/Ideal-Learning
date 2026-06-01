@@ -2577,3 +2577,329 @@ Eğitmen:
 
     print(f"[Gemini AI Tutor Error - All Attempts Failed]: {last_error}")
     return f"Üzgünüm, sorunuzu işlerken teknik bir hata oluştu ({last_error}). Lütfen tekrar deneyin."
+
+
+# ============================================================
+# DYNAMIC PATH ADAPTATION (DINAMIK MUFREDAT)
+# ============================================================
+
+def build_adapt_week_prompt(
+    plan_topic: str,
+    plan_level: str,
+    plan_goal: str,
+    plan_weekly_hours: int,
+    plan_learning_preference: str | None,
+    target_week_number: int,
+    target_week_title: str,
+    target_week_description: str | None,
+    target_week_mini_project: str | None,
+    target_week_tasks: list[dict],
+    target_week_resources: list[dict],
+    weak_topics: list[str],
+    recommended_actions: list[str]
+) -> str:
+    """Builds prompt for Gemini to adapt target week based on quiz analysis."""
+    tasks_str = ""
+    for idx, t in enumerate(target_week_tasks, 1):
+        tasks_str += f"- Görev {idx}: {t.get('task_text')} (Tip: {t.get('task_type') or 'Uygulama'}, Süre: {t.get('estimated_minutes') or 60} dk, Zorluk: {t.get('difficulty') or 'Orta'})\n"
+        
+    resources_str = ""
+    for idx, r in enumerate(target_week_resources, 1):
+        resources_str += f"- Kaynak {idx}: {r.get('resource_title')} (Tip: {r.get('resource_type') or 'Dokümantasyon'}, Açıklama: {r.get('resource_description') or ''}, URL: {r.get('resource_url') or ''})\n"
+
+    weak_topics_str = ", ".join(weak_topics) if weak_topics else "Genel eksikler"
+    actions_str = "\n".join([f"- {act}" for act in recommended_actions]) if recommended_actions else "- Eksik konuların tekrar edilmesi"
+
+    prompt = f"""
+Sen yapay zekâ destekli kişisel öğrenme platformunda uzman bir Yazılım ve Teknik Eğitmensin.
+Sana bir öğrenme planının detayları, güncellenecek olan hedef haftanın (Hafta {target_week_number}) mevcut içeriği (başlık, açıklama, görevler, kaynaklar) ve öğrencinin son quizinden elde edilen zayıf konular ile gelişim önerileri verilmektedir.
+
+Görevin, hedef haftanın içeriğini zayıf konulara göre UYARLAMAK ve zayıf konuları pekiştirecek şekilde güncellemektir.
+
+## ANA KURALLAR:
+1. Mevcut haftanın görevlerini (`tasks`) ve kaynaklarını (`resources`) koru (mevcut görevleri silme, ama zayıf konularla pratik ilişkisini kurmak için hafifçe düzenleyebilir veya aynen bırakabilirsin).
+2. Haftanın görev listesine, zayıf kalınan konuları kapatmak amacıyla **en az 2 en fazla 3 yeni tekrar ve pratik görevi** ekle.
+3. Bu yeni eklenen tekrar görevlerinin `task_type` değerini `"review"` olarak ata ve `task_text` metinlerinin başına mutlaka `"[Zayıf Konu Tekrarı] "` önekini koy. (Örn: "[Zayıf Konu Tekrarı] Değişken kapsamı ve global anahtar kelimesi ile ilgili 3 pratik egzersiz yap.")
+4. Kaynaklar listesine, bu zayıf konuları çalışmaya yardımcı olacak **1 veya 2 yeni öğretici kaynak** (dokümantasyon veya video arama önerisi) ekle.
+5. Yanıtı mutlaka JSON formatında döndür. JSON yapısı tam olarak aşağıdaki şablona uymalıdır. JSON harici hiçbir açıklama veya ek karakter (markdown kod blokları hariç, o da sadece ```json ile) yazma.
+
+## HEDEF HAFTA DETAYLARI:
+- Hafta No: {target_week_number}
+- Mevcut Başlık: {target_week_title}
+- Mevcut Açıklama: {target_week_description or 'Yok'}
+- Mevcut Mini Proje: {target_week_mini_project or 'Yok'}
+- Mevcut Görevler:
+{tasks_str}
+- Mevcut Kaynaklar:
+{resources_str}
+
+## ÖĞRENCİNİN ZAYIF KONULARI & AI ÖNERİLERİ:
+- Zayıf Konular: {weak_topics_str}
+- Gelişim Önerileri:
+{actions_str}
+
+## ÖĞRENME PLANI GENEL BİLGİLERİ:
+- Ana Konu: {plan_topic}
+- Seviye: {plan_level}
+- Hedef: {plan_goal}
+- Haftalık Çalışma Saati: {plan_weekly_hours} saat
+- Tercih: {plan_learning_preference or 'Yok'}
+
+## DÖNDÜRÜLECEK JSON ŞABLONU:
+{{
+  "title": "Hafta Başlığı",
+  "description": "Hafta Açıklaması",
+  "estimated_hours": {plan_weekly_hours},
+  "mini_project": "Mini Proje Açıklaması",
+  "tasks": [
+    {{
+      "task_text": "[Zayıf Konu Tekrarı] ...",
+      "task_type": "review",
+      "estimated_minutes": 45,
+      "difficulty": "Orta"
+    }},
+    ...
+  ],
+  "resources": [
+    {{
+      "resource_title": "...",
+      "resource_type": "Dokümantasyon",
+      "resource_description": "...",
+      "resource_url": "..."
+    }}
+  ]
+}}
+"""
+    return prompt
+
+
+def generate_fallback_adapted_week(
+    original_tasks: list[dict],
+    original_resources: list[dict],
+    weak_topics: list[str]
+) -> Dict[str, Any]:
+    """Generates local fallback adapted tasks and resources if Gemini fails."""
+    adapted_tasks = []
+    for t in original_tasks:
+        adapted_tasks.append({
+            "task_text": t.get("task_text") or "Görev açıklaması",
+            "task_type": t.get("task_type") or "Uygulama",
+            "estimated_minutes": t.get("estimated_minutes") or 60,
+            "difficulty": t.get("difficulty") or "Orta"
+        })
+
+    topics_label = ", ".join(weak_topics) if weak_topics else "zayıf konular"
+    adapted_tasks.append({
+        "task_text": f"[Zayıf Konu Tekrarı] {topics_label} ile ilgili temel kavramları ve konu anlatımlarını tekrar gözden geçirin.",
+        "task_type": "review",
+        "estimated_minutes": 45,
+        "difficulty": "Orta"
+    })
+    adapted_tasks.append({
+        "task_text": f"[Zayıf Konu Tekrarı] {topics_label} konusundaki eksikleri kapatacak pratik uygulamalar ve alıştırmalar yapın.",
+        "task_type": "review",
+        "estimated_minutes": 60,
+        "difficulty": "Zor"
+    })
+
+    adapted_resources = []
+    for r in original_resources:
+        adapted_resources.append({
+            "resource_title": r.get("resource_title") or "Önerilen Kaynak",
+            "resource_type": r.get("resource_type") or "Dokümantasyon",
+            "resource_description": r.get("resource_description") or "",
+            "resource_url": r.get("resource_url")
+        })
+
+    adapted_resources.append({
+        "resource_title": f"{topics_label} Tekrar Rehberi",
+        "resource_type": "Dokümantasyon",
+        "resource_description": "Zayıf kaldığınız konuları pekiştirmenize yardımcı olacak dokümantasyon.",
+        "resource_url": None
+    })
+
+    return {
+        "title": None,
+        "description": None,
+        "estimated_hours": None,
+        "mini_project": None,
+        "tasks": adapted_tasks,
+        "resources": adapted_resources
+    }
+
+
+def normalize_adapted_week(
+    week_data: Dict[str, Any],
+    plan_weekly_hours: int,
+    target_week_number: int,
+    original_tasks: list[dict],
+    original_resources: list[dict],
+    weak_topics: list[str]
+) -> Dict[str, Any]:
+    """Sanitizes and normalizes the week structure adapted by Gemini."""
+    if not isinstance(week_data, dict):
+        fallback = generate_fallback_adapted_week(original_tasks, original_resources, weak_topics)
+        fallback["title"] = f"Hafta {target_week_number} (Adapte Edildi)"
+        fallback["description"] = "Zayıf kalınan konulara göre uyarlanmış haftalık plan."
+        fallback["estimated_hours"] = plan_weekly_hours
+        return fallback
+
+    allowed_task_types = {"Teori", "Uygulama", "Proje", "Tekrar", "Araştırma", "review"}
+    allowed_difficulties = {"Kolay", "Orta", "Zor"}
+
+    normalized_week = {
+        "title": week_data.get("title") or f"Hafta {target_week_number} (Adapte Edildi)",
+        "description": week_data.get("description") or "Bu hafta zayıf konularınızı pekiştirmek için ek çalışmalar da içermektedir.",
+        "estimated_hours": week_data.get("estimated_hours") or plan_weekly_hours,
+        "mini_project": week_data.get("mini_project"),
+        "tasks": [],
+        "resources": []
+    }
+
+    raw_tasks = week_data.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        raw_tasks = []
+
+    for task_data in raw_tasks:
+        if not isinstance(task_data, dict):
+            continue
+        task_text = task_data.get("task_text") or "Görev"
+        task_type = task_data.get("task_type") or "Uygulama"
+        difficulty = task_data.get("difficulty") or "Orta"
+        estimated_minutes = task_data.get("estimated_minutes") or 60
+
+        if task_type not in allowed_task_types:
+            task_type = "Uygulama"
+        if difficulty not in allowed_difficulties:
+            difficulty = "Orta"
+        try:
+            estimated_minutes = int(estimated_minutes)
+        except (TypeError, ValueError):
+            estimated_minutes = 60
+
+        normalized_week["tasks"].append({
+            "task_text": task_text,
+            "task_type": task_type,
+            "estimated_minutes": estimated_minutes,
+            "difficulty": difficulty
+        })
+
+    raw_resources = week_data.get("resources", [])
+    if not isinstance(raw_resources, list):
+        raw_resources = []
+
+    for res_data in raw_resources:
+        if not isinstance(res_data, dict):
+            continue
+        normalized_week["resources"].append({
+            "resource_title": res_data.get("resource_title") or "Önerilen Kaynak",
+            "resource_type": res_data.get("resource_type") or "Dokümantasyon",
+            "resource_description": res_data.get("resource_description") or "",
+            "resource_url": res_data.get("resource_url")
+        })
+
+    if not normalized_week["tasks"]:
+        fallback = generate_fallback_adapted_week(original_tasks, original_resources, weak_topics)
+        fallback["title"] = normalized_week["title"]
+        fallback["description"] = normalized_week["description"]
+        fallback["estimated_hours"] = normalized_week["estimated_hours"]
+        fallback["mini_project"] = normalized_week["mini_project"]
+        return fallback
+
+    return normalized_week
+
+
+def adapt_week_with_quiz_analysis_with_gemini(
+    plan_topic: str,
+    plan_level: str,
+    plan_goal: str,
+    plan_weekly_hours: int,
+    plan_learning_preference: str | None,
+    target_week_number: int,
+    target_week_title: str,
+    target_week_description: str | None,
+    target_week_mini_project: str | None,
+    target_week_tasks: list[dict],
+    target_week_resources: list[dict],
+    weak_topics: list[str],
+    recommended_actions: list[str]
+) -> Dict[str, Any]:
+    """
+    Adapts and enriches the target week tasks and resources by querying Gemini
+    with previous week's quiz weak topics and recommended actions.
+    """
+    prompt = build_adapt_week_prompt(
+        plan_topic=plan_topic,
+        plan_level=plan_level,
+        plan_goal=plan_goal,
+        plan_weekly_hours=plan_weekly_hours,
+        plan_learning_preference=plan_learning_preference,
+        target_week_number=target_week_number,
+        target_week_title=target_week_title,
+        target_week_description=target_week_description,
+        target_week_mini_project=target_week_mini_project,
+        target_week_tasks=target_week_tasks,
+        target_week_resources=target_week_resources,
+        weak_topics=weak_topics,
+        recommended_actions=recommended_actions
+    )
+
+    if client is None:
+        fallback = generate_fallback_adapted_week(target_week_tasks, target_week_resources, weak_topics)
+        fallback["title"] = f"{target_week_title} (Tekrar Eklendi)"
+        fallback["description"] = target_week_description
+        fallback["estimated_hours"] = plan_weekly_hours
+        fallback["mini_project"] = target_week_mini_project
+        return fallback
+
+    max_attempts = 3
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.4,
+                    safety_settings=DEFAULT_SAFETY_SETTINGS
+                )
+            )
+
+            response_text = get_response_text_safely(response)
+            parsed_data = parse_gemini_json_response(response_text)
+
+            return normalize_adapted_week(
+                week_data=parsed_data,
+                plan_weekly_hours=plan_weekly_hours,
+                target_week_number=target_week_number,
+                original_tasks=target_week_tasks,
+                original_resources=target_week_resources,
+                weak_topics=weak_topics
+            )
+
+        except GeminiSafetyRefusalError:
+            # Re-raise safety block directly
+            raise
+        except Exception as error:
+            error_message = str(error)
+            if any(sig in error_message.lower() for sig in ["safety", "block", "harmful", "policy", "abuse", "finish_reason"]):
+                raise GeminiSafetyRefusalError(
+                    f"Gemini güvenlik politikaları nedeniyle istek engellendi: {error_message}"
+                ) from error
+
+            last_error = error
+            print(f"[Gemini Adapt Curriculum Error] Attempt {attempt}/{max_attempts}: {error}")
+            if attempt < max_attempts:
+                time.sleep(1)
+                continue
+
+    # All attempts failed, return fallback
+    print(f"[Gemini Adapt Curriculum Error - All Attempts Failed]: {last_error}")
+    fallback = generate_fallback_adapted_week(target_week_tasks, target_week_resources, weak_topics)
+    fallback["title"] = f"{target_week_title} (Tekrar Eklendi - Fallback)"
+    fallback["description"] = target_week_description
+    fallback["estimated_hours"] = plan_weekly_hours
+    fallback["mini_project"] = target_week_mini_project
+    return fallback

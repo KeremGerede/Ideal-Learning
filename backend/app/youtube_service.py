@@ -16,11 +16,55 @@ YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 
 
+import tempfile
+import time
+
+_youtube_api_disabled = False
+TEMP_DISABLE_FILE = os.path.join(tempfile.gettempdir(), "learning_platform_youtube_disabled.txt")
+
+
+def disable_youtube_api_persistently():
+    global _youtube_api_disabled
+    _youtube_api_disabled = True
+    try:
+        with open(TEMP_DISABLE_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
+def is_youtube_disabled_persistently() -> bool:
+    global _youtube_api_disabled
+    if _youtube_api_disabled:
+        return True
+    
+    if os.path.exists(TEMP_DISABLE_FILE):
+        try:
+            with open(TEMP_DISABLE_FILE, "r") as f:
+                content = f.read().strip()
+                if content:
+                    disabled_time = float(content)
+                    # Devre dışı bırakıldıktan sonra 12 saat geçtiyse tekrar denemek için temizleyelim
+                    if time.time() - disabled_time < 43200:
+                        _youtube_api_disabled = True
+                        return True
+                    else:
+                        # 12 saat geçmişse dosyayı silip tekrar deneyelim
+                        try:
+                            os.remove(TEMP_DISABLE_FILE)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return False
+
+
 def is_youtube_configured() -> bool:
     """
     YouTube Data API key tanımlı mı kontrol eder.
     """
-
+    if is_youtube_disabled_persistently():
+        return False
     return bool(YOUTUBE_API_KEY)
 
 
@@ -226,6 +270,7 @@ def get_video_details(video_ids: List[str]) -> Dict[str, Dict[str, Any]]:
 
     status.embeddable alanı burada kontrol edilir.
     """
+    global _youtube_api_disabled
 
     if not video_ids or not is_youtube_configured():
         return {}
@@ -256,7 +301,29 @@ def get_video_details(video_ids: List[str]) -> Dict[str, Dict[str, Any]]:
 
         return details
 
-    except Exception:
+    except Exception as e:
+        err_msg = str(e).lower()
+        is_403 = False
+        if hasattr(e, "response") and getattr(e, "response") is not None:
+            if getattr(e.response, "status_code", None) == 403:
+                is_403 = True
+            else:
+                try:
+                    if e.response.json().get("error", {}).get("code") == 403:
+                        is_403 = True
+                except Exception:
+                    pass
+        if "403" in err_msg or "forbidden" in err_msg or "quota" in err_msg:
+            is_403 = True
+
+        if is_403:
+            disable_youtube_api_persistently()
+            print("\n" + "="*80)
+            print("[WARNING] YouTube Data API v3 returned a 403 Forbidden / Quota Exceeded error in get_video_details.")
+            print("YouTube search calls will be persistently DISABLED for 12 hours to prevent console spam.")
+            print("="*80 + "\n")
+        else:
+            print(f"[YouTube Video Details Error] API request failed: {e}")
         return {}
 
 
@@ -275,6 +342,7 @@ def search_youtube_videos(
     - videos.list detayları gelirse embeddable kontrol edilir.
     - Detay servisi boş dönerse tüm videoları çöpe atmıyoruz; search sonucu kullanılabilir kabul edilir.
     """
+    global _youtube_api_disabled
 
     if not is_youtube_configured():
         return []
@@ -369,9 +437,63 @@ def search_youtube_videos(
             if videos:
                 return videos
 
+        except requests.exceptions.RequestException as re:
+            status_code = getattr(re.response, "status_code", None) if getattr(re, "response", None) is not None else None
+            is_403 = (status_code == 403)
+            if not is_403 and re.response is not None:
+                try:
+                    if re.response.json().get("error", {}).get("code") == 403:
+                        is_403 = True
+                except Exception:
+                    pass
+            err_msg = str(re).lower()
+            if "403" in err_msg or "forbidden" in err_msg or "quota" in err_msg:
+                is_403 = True
+
+            if is_403:
+                disable_youtube_api_persistently()
+                print("\n" + "="*80)
+                print("[WARNING] YouTube Data API v3 returned a 403 Forbidden / Quota Exceeded error.")
+                print("This usually means one of the following:")
+                print("1. Your YOUTUBE_API_KEY in .env is invalid or has wrong restrictions.")
+                print("2. The YouTube Data API v3 is not enabled in your Google Cloud Console project.")
+                print("3. Your API key quota has been exceeded (default limit is very low for search).")
+                print("YouTube search calls will be persistently DISABLED for 12 hours to prevent console spam.")
+                print("="*80 + "\n")
+                break
+            else:
+                print(f"[YouTube Search Error] API HTTP error {status_code}: {re}")
+                continue
+
         except Exception as e:
-            print(f"[YouTube Search Error] API request failed: {e}")
-            continue
+            err_msg = str(e).lower()
+            is_403 = False
+            if hasattr(e, "response") and getattr(e, "response") is not None:
+                if getattr(e.response, "status_code", None) == 403:
+                    is_403 = True
+                else:
+                    try:
+                        if e.response.json().get("error", {}).get("code") == 403:
+                            is_403 = True
+                    except Exception:
+                        pass
+            if "403" in err_msg or "forbidden" in err_msg or "quota" in err_msg:
+                is_403 = True
+
+            if is_403:
+                disable_youtube_api_persistently()
+                print("\n" + "="*80)
+                print("[WARNING] YouTube Data API v3 returned a 403 Forbidden / Quota Exceeded error.")
+                print("This usually means one of the following:")
+                print("1. Your YOUTUBE_API_KEY in .env is invalid or has wrong restrictions.")
+                print("2. The YouTube Data API v3 is not enabled in your Google Cloud Console project.")
+                print("3. Your API key quota has been exceeded (default limit is very low for search).")
+                print("YouTube search calls will be persistently DISABLED for 12 hours to prevent console spam.")
+                print("="*80 + "\n")
+                break
+            else:
+                print(f"[YouTube Search Error] API request failed: {e}")
+                continue
 
     return []
 
